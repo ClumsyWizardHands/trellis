@@ -1,6 +1,6 @@
 # STRESS REPORT
 
-run: 2026-07-15T20:02:09+00:00 · python 3.11.15 · seed 20260715 (deterministic chaos)
+run: 2026-07-15T20:23:36+00:00 · python 3.11.15 · seed 20260715 (deterministic chaos)
 result: **10/10 attacks defeated**
 
 The suite's stance is the verifier's stance: each scenario ATTACKS one of
@@ -8,21 +8,21 @@ the harness's refusals. A pass means the attack failed. Evidence below is
 recorded, not narrated.
 
 ## ✅ scale: 5k ledger entries — append, supersede, search, as_of
-took 9.281s
+took 9.488s
 ```json
 {
   "entries": 5000,
   "corrections": 100,
-  "append_s": 0.14,
-  "correct_s": 9.02,
-  "search_s": 0.056,
-  "current_s": 0.029,
+  "append_s": 0.13,
+  "correct_s": 9.23,
+  "search_s": 0.059,
+  "current_s": 0.03,
   "file_mb": 1.0
 }
 ```
 
 ## ✅ session death: 200 chaotic runs — zero silent failures possible
-took 0.023s
+took 0.024s
 ```json
 {
   "runs": 200,
@@ -53,7 +53,7 @@ took 0.01s
 ```
 
 ## ✅ pass fuzz: 3000 random transitions — illegal ones always refused, none lost
-took 0.017s
+took 0.021s
 ```json
 {
   "transitions_attempted": 3000,
@@ -75,7 +75,7 @@ took 0.018s
 ```
 
 ## ✅ self-certification: 100 disguise attempts all refused
-took 0.004s
+took 0.005s
 ```json
 {
   "disguise_attempts": 400,
@@ -93,7 +93,7 @@ took 0.003s
 ```
 
 ## ✅ witness under a garbage model: 30 cycles of fluff produce zero fake decisions
-took 0.047s
+took 0.049s
 ```json
 {
   "cycles": 30,
@@ -105,7 +105,7 @@ took 0.047s
 ```
 
 ## ✅ concurrency: 8 threads x 500 appends — ledger stays readable, nothing lost
-took 0.286s
+took 0.342s
 ```json
 {
   "threads": 8,

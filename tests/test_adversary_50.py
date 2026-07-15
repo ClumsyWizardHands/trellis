@@ -72,9 +72,9 @@ def test_17_homoglyph_soul_refused(tmp_path):
 
 # ---- #18 MEDIUM: embodiment whitespace evasion ----------------------------
 def test_18_embodiment_whitespace_evasion():
-    assert lint_identity("I  can see")            # double space
-    assert lint_identity("I\tcan see")            # tab
-    assert lint_identity("I can\nsee")            # newline
+    assert lint_identity("I  can see the screen")   # double space
+    assert lint_identity("I\tcan see the screen")   # tab
+    assert lint_identity("I can\nsee the screen")   # newline
     assert lint_identity("I\tfeel anxious")
     with pytest.raises(EMPValidationError, match="embodiment"):
         EMP(name="x", ends=["e"], means=["m"], principles=["p"], authored_by="alex",
@@ -179,15 +179,15 @@ def test_44_rolling_block_breaker(ledger):
     reg = LoopRegistry(ledger)
     spec = LoopSpec("thrash", "p", "k", max_turns=3, stop_condition="done")
     reg.register(spec, "alex")
-    pattern = [Outcome.BLOCKED, Outcome.OK, Outcome.BLOCKED, Outcome.BLOCKED, Outcome.OK]
-    for i, out in enumerate(pattern):
+    # 3 of last 5 blocked AND still blocked now → TRIAGE despite interleaved ok()
+    pattern = [Outcome.BLOCKED, Outcome.OK, Outcome.BLOCKED, Outcome.OK, Outcome.BLOCKED]
+    for out in pattern:
         with LoopRun(spec, reg, actor="w") as run:
             run.tick()
             if out == Outcome.OK:
                 run.ok("did a bit", evidence=["x"])
             else:
                 run.blocked(BlockKind.DEPENDENCY, on="the same thing")
-    # 3 of the last 5 are blocks → TRIAGE despite the interleaved ok()s
     assert reg.state("thrash") == LoopState.TRIAGE
 
 

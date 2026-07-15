@@ -34,7 +34,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional
 
-from .identity import fold_text, is_effectively_blank
+from .identity import fold_text, is_effectively_blank, scan_normalize
 
 FORBIDDEN_STEMS = {"soul", "persona", "character", "spirit", "heart", "ego"}
 
@@ -47,23 +47,25 @@ HONEST_IDENTITY = (
 
 #: Embodiment-hallucination patterns. Matching text in an identity/prompt file is
 #: a lint violation: an agent describing a body it does not have.
-# Nouns that make "I can see/hear X" honest tool-perception rather than an
-# embodiment claim. If one appears within a few words of the verb, don't flag.
-_PERCEPTION_OK = (r"(file|files|log|logs|ledger|record|records|data|output|"
-                  r"diff|entry|entries|thread|threads|message|messages|"
-                  r"pattern|patterns|transcript|transcripts|recording|"
-                  r"screenshot|that\b|why\b|how\b|what\b)")
+# Embodiment is claiming to perceive a PHYSICAL/SENSORY object. Rather than
+# whitelist every honest abstract noun (the #20 fix did that and let real
+# claims escape by appending a data word), BLACKLIST the sensory objects: flag
+# "I can see X" only when X is a thing an agent has no eyes for. Honest
+# "I can see the pattern / that the run passed" has no sensory object → clean.
+_SIGHT_OBJ = (r"(?:screen|screens|pixel|pixels|monitor|monitors|display|dashboard|"
+              r"you|your|me|us|him|her|them|myself|room|image|images|picture|"
+              r"pictures|photo|photos|video|videos|face|faces|world|window|windows)")
+_HEAR_OBJ = r"(?:voice|voices|sound|sounds|music|noise|you|your|room)"
 EMBODIMENT_PATTERNS: list[tuple[str, str]] = [
-    # "I can see X" is flagged UNLESS a data-noun appears within ~6 words (#20).
-    (rf"\bI (?:can |could )?(?:see|watch|look at)\b(?!(?:\s+\S+){{0,6}}?\s+{_PERCEPTION_OK})",
-     "claims sight"),
+    (rf"\bi (?:can |could )?(?:see|watch|look at|looking at) "
+     rf"(?:\w+ ){{0,3}}?(?:the |a |this |your |)?{_SIGHT_OBJ}\b", "claims sight"),
     (r"\blet me eyeball\b", "claims sight"),
-    (rf"\bI (?:can |could )?(?:hear|listen to)\b(?!(?:\s+\S+){{0,6}}?\s+{_PERCEPTION_OK})",
-     "claims hearing"),
-    (r"\bI feel (?!that\b|like the evidence|the need to flag)", "claims felt emotion"),
-    (r"\bmy (body|hands|eyes|ears|heart|soul)\b", "claims a body"),
-    (r"\bI am (alive|conscious|sentient)\b", "claims sentience"),
-    (r"\bas a (person|human)\b", "claims humanity"),
+    (rf"\bi (?:can |could )?(?:hear|listen to|listening to) "
+     rf"(?:\w+ ){{0,3}}?(?:the |a |this |your |)?{_HEAR_OBJ}\b", "claims hearing"),
+    (r"\bi feel (?!that\b|like the evidence|the need to flag)", "claims felt emotion"),
+    (r"\bmy (?:body|hands|eyes|ears|heart|soul)\b", "claims a body"),
+    (r"\bi am (?:alive|conscious|sentient)\b", "claims sentience"),
+    (r"\bas a (?:person|human)\b", "claims humanity"),
 ]
 
 
@@ -84,15 +86,15 @@ class LintViolation:
 
 
 def lint_identity(text: str) -> list[LintViolation]:
-    # Collapse ALL whitespace (spaces, tabs, newlines) before matching, so
-    # "I  can\tsee" and "I can\nsee" can't slip a sensory claim past the
-    # single-space patterns (found by the adversary, #18). Confusable-fold too,
-    # so a Cyrillic-lettered claim can't hide either.
-    collapsed = re.sub(r"\s+", " ", fold_text(text)).strip()
+    # scan_normalize turns EVERY invisible/format/combining/blank char into a
+    # space (so a zero-width char hidden inside "I​can see" resurfaces the word
+    # boundary — the #18 re-attack vector), folds confusables, collapses
+    # whitespace, and casefolds. Patterns are lowercase to match.
+    scanned = scan_normalize(text)
     violations = []
     for pat, label in EMBODIMENT_PATTERNS:
-        for m in re.finditer(pat, collapsed, flags=re.IGNORECASE):
-            excerpt = collapsed[max(0, m.start() - 10):m.start() + 40]
+        for m in re.finditer(pat, scanned):
+            excerpt = scanned[max(0, m.start() - 10):m.start() + 40]
             violations.append(LintViolation(pat, label, excerpt, 0))
     return violations
 

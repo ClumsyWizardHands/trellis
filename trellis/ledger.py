@@ -53,10 +53,17 @@ class Entry:
         }
         if self.supersedes:
             d["supersedes"] = self.supersedes
-        # default=str: a non-JSON value in a body (an enum, a datetime, an
-        # exception) must NEVER stop an entry from being written — that would
-        # turn a loop outcome into a silent failure, the cardinal sin (#42).
-        return json.dumps(d, ensure_ascii=False, default=str)
+        # An entry must ALWAYS serialize — a non-writable outcome would be a
+        # silent failure, the cardinal sin. default=str handles exotic types;
+        # the try/except also handles CIRCULAR references, which raise BEFORE
+        # default= is ever consulted (the #42 re-attack vector). A pathological
+        # body degrades to its repr rather than blocking the write.
+        try:
+            return json.dumps(d, ensure_ascii=False, default=str)
+        except (ValueError, TypeError, RecursionError):
+            safe = dict(d)
+            safe["body"] = {"_unserializable": True, "repr": repr(self.body)[:4000]}
+            return json.dumps(safe, ensure_ascii=False, default=str)
 
     @staticmethod
     def from_json(line: str) -> "Entry":

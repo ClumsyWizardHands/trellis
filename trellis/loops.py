@@ -162,6 +162,12 @@ class LoopRun:
         return self
 
     def __exit__(self, exc_type, exc, tb) -> bool:
+        # ended-once guard: calling __exit__ again (directly, or via a second
+        # with-block) must NOT emit a duplicate loop_run_end (the #45 re-attack
+        # found the guard was only on __enter__).
+        if getattr(self, "_ended", False):
+            return False
+        self._ended = True
         if self._outcome is None:
             if exc is not None:
                 self._set(Outcome.PROTOCOL_VIOLATION, {
@@ -225,11 +231,14 @@ class LoopRegistry:
         recent2 = self.recent_outcomes(loop_name, n=2)
         if len(recent2) == 2 and all(o == Outcome.BLOCKED.value for o in recent2):
             return LoopState.TRIAGE        # two consecutive blocks
-        # rolling breaker: a loop that blocks a majority of a recent window is
-        # thrashing even if it sneaks an ok() between blocks to reset the
-        # consecutive counter (found by the adversary, #44).
+        # rolling breaker: a loop blocking a majority of a recent window is
+        # thrashing even if it sneaks an ok() between blocks (#44). BUT only if
+        # it is STILL blocked now — a loop that recovered (last outcome not a
+        # block) is healthy and must not be triaged (the #44 re-attack: a
+        # false triage of a recovered loop).
         window = self.recent_outcomes(loop_name, n=5)
-        if len(window) >= 4 and sum(o == Outcome.BLOCKED.value for o in window) >= 3:
+        if (window and window[-1] == Outcome.BLOCKED.value
+                and sum(o == Outcome.BLOCKED.value for o in window) >= 3):
             return LoopState.TRIAGE
         if len(recent2) == 2 and all(o == Outcome.NOTHING_NEW.value for o in recent2):
             return LoopState.DORMANT       # stop burning budget on quiet

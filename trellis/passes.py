@@ -97,12 +97,15 @@ class Pass:
         # substance, not just token count: "do it now ok pls" and "a b c d e"
         # and "..... ." are five "words" but no ask (found by the adversary, #36).
         meaningful = [w for w in ask_words if len(re.sub(r"\W", "", w)) >= 2]
-        if len(ask_words) < MIN_ASK_WORDS or len(meaningful) < 3 or \
-                len(re.sub(r"\W", "", self.ask)) < 12:
+        distinct = {w.lower() for w in meaningful}
+        # distinctness too: "review review review review review" is 5 meaningful
+        # words but says one thing five times — no real ask (#36 re-attack).
+        if (len(ask_words) < MIN_ASK_WORDS or len(meaningful) < 3
+                or len(distinct) < 3 or len(re.sub(r"\W", "", self.ask)) < 12):
             raise TurdDropError(
                 f"a pass needs a clear ask with substance (got {len(ask_words)} "
-                f"words, {len(meaningful)} meaningful). State what the receiver "
-                "should DO, by when, and what done looks like.")
+                f"words, {len(distinct)} distinct meaningful). State what the "
+                "receiver should DO, by when, and what done looks like.")
         if not self.context.strip():
             raise TurdDropError(
                 "a pass with no context makes the receiver reconstruct your "

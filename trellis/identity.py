@@ -33,17 +33,42 @@ _CONFUSABLES = {
 }
 _CONF_TABLE = str.maketrans(_CONFUSABLES)
 
+# Categories whose characters are invisible / non-graphic and must be REMOVED
+# before any identity or content comparison: control, format, surrogate,
+# private-use, unassigned, combining marks, and line/paragraph separators.
+_REMOVE_CATS = {"Cc", "Cf", "Cs", "Co", "Cn", "Mn", "Me", "Zl", "Zp"}
+# Characters that render blank but sit in OTHER categories, so the category
+# test alone misses them. The 50-agent re-attack found every one of these:
+# braille blank (So), Hangul fillers (Lo), Mongolian vowel separator, etc.
+_EXTRA_BLANK = {
+    "⠀",                        # BRAILLE PATTERN BLANK (So)
+    "ᅠ", "ㅤ", "ᅟ", "ﾠ",  # Hangul fillers (Lo)
+    "᠎",                        # Mongolian vowel separator
+    "​", "‌", "‍", "⁠", "﻿", "­", "͏",  # ZW family
+}
+
+
+def _strip_invisible(s: str) -> str:
+    """Remove every non-graphic / blank-rendering character, across ALL
+    categories — not just Z and C (the hole the re-attack exploited)."""
+    return "".join(
+        ch for ch in s
+        if unicodedata.category(ch) not in _REMOVE_CATS and ch not in _EXTRA_BLANK)
+
 
 def _fold(s: str) -> str:
-    """NFKC (folds long-s, fullwidth, ligatures) → confusable table → casefold."""
-    s = unicodedata.normalize("NFKC", s or "")
+    """NFKC (folds long-s, fullwidth, subscripts, ligatures) → confusable
+    table → strip invisibles → casefold. Invisible chars are removed so a
+    homoglyph hiding a zero-width joiner ('so‍ul') folds to its bare form."""
+    s = unicodedata.normalize("NFKD", s or "")
     s = s.translate(_CONF_TABLE)
+    s = _strip_invisible(s)
     return s.casefold()
 
 
 def normalize_identity(s: str) -> str:
     """Canonical identity string. 'WITNESS:A', ' witness:a ', 'witnеss:a'
-    (Cyrillic) all collapse to one value; invisible chars are dropped."""
+    (Cyrillic), and any invisible-char variant all collapse to one value."""
     folded = _fold(s)
     return re.sub(r"[^a-z0-9:_/-]+", "", folded.strip())
 
@@ -54,17 +79,33 @@ def same_identity(a: str, b: str) -> bool:
 
 
 def fold_text(s: str) -> str:
-    """Confusable-fold arbitrary text (for content gates like the soul-file and
-    embodiment checks) without stripping structure."""
+    """Confusable-fold arbitrary text for content gates (soul-file check):
+    NFKC + confusables + invisibles REMOVED + casefold — so 'ѕo‍ul' folds to
+    'soul' (glyphs join)."""
     return _fold(s)
 
 
+def scan_normalize(s: str) -> str:
+    """For content SCANNING (the embodiment linter): every invisible/blank
+    character becomes a SPACE (so a hidden word-break resurfaces), confusables
+    fold, whitespace collapses, casefold. Distinct from fold_text, which
+    removes invisibles — a scanner wants word boundaries to surface, a
+    name-matcher wants glyphs to join."""
+    nf = unicodedata.normalize("NFKD", s or "")
+    spaced = "".join(
+        " " if (unicodedata.category(ch) in _REMOVE_CATS or ch in _EXTRA_BLANK) else ch
+        for ch in nf)
+    spaced = spaced.translate(_CONF_TABLE)
+    return re.sub(r"\s+", " ", spaced).strip().casefold()
+
+
 def is_effectively_blank(s: str | None) -> bool:
-    """True if s is empty once whitespace, zero-width, control and format
-    characters are removed. Catches ' ', '\\u200b', '\\t', '\\xa0', etc."""
+    """True if s carries no meaningful visible character once NFKC-normalized,
+    all invisible/blank characters (any category, incl. braille blank and
+    Hangul fillers) removed, and whitespace stripped."""
     if not s:
         return True
-    cleaned = "".join(
-        ch for ch in unicodedata.normalize("NFKC", s)
-        if not unicodedata.category(ch)[0] in {"Z", "C"})
+    cleaned = _strip_invisible(unicodedata.normalize("NFKD", s))
+    # remaining spaces (category Zs — normal, NBSP, ideographic) are whitespace
+    cleaned = "".join(ch for ch in cleaned if unicodedata.category(ch) != "Zs")
     return cleaned.strip() == ""
