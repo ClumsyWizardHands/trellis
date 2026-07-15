@@ -413,19 +413,63 @@ unresolved.
 
 ---
 
-## 13. How it looks and functions — the actual UI
+## 13. How it looks and functions — a comprehension-and-reflection portal
 
-This is a real screenshot of the running web UI (`web/app.py`) over a demo
-ledger — inbox with approve/deny, decisions with lineage (the hidden-no flagged
-red), loop health, trust (verified by others, never itself), the agent roster,
-the activity story, and the self-image panel with its honest "why."
+The UI is **not** an operations console (v1 was — see the anti-example at the
+bottom of this section). It's a place to *understand* the agent, and the room
+where the agent *understands and re-images itself* each day. A side nav of
+self-explaining, single-job pages:
+
+```mermaid
+flowchart LR
+    NAV["side nav"] --> HOME["Overview<br/>one honest line per agent"]
+    NAV --> ACT["Activity<br/>the full log — copy out to debug"]
+    NAV --> AG["Agents<br/>who each one is, plainly"]
+    NAV --> DEC["Decisions<br/>how it reasoned (Y/N/T opens up)"]
+    NAV --> LP["Loops<br/>what runs, dive into any run"]
+    NAV --> VE["Verification<br/>the verifiers IN THE ACT"]
+    NAV --> RE["Reflection<br/>how it sees itself today"]
+    classDef p fill:#0d2818,stroke:#3fb950,color:#e6edf3
+    class HOME,ACT,AG,DEC,LP,VE,RE p
+```
+
+Its heart is the **Reflection** page — the daily self-image ritual. Every trait
+of the creature ties to real, cited events; a self-change is a verified proposal,
+never a vibe (full design + the honesty guardrails:
+[`ROADMAP-UI-SPINE.md`](ROADMAP-UI-SPINE.md)):
 
 <p align="center">
-  <img src="assets/ui-dashboard.png" width="900" alt="the trellis web UI"/>
+  <img src="assets/ui-reflection-mockup.png" width="900" alt="the Reflection room — the reframed UI"/>
 </p>
+
+The daily ritual, as a sequence — grounded, logged, cited, honest:
+
+```mermaid
+sequenceDiagram
+    participant D as the day's real record
+    participant R as reflection (private)
+    participant L as reflection log
+    participant G as self-image
+    D->>R: reflect on TODAY vs YESTERDAY
+    R->>L: write it, CITING the events it rests on
+    L->>G: render the image from the grounded reflection
+    Note over G: "warmer — the room was collaborative,<br/>3 calls confirmed, one triangulation still open"<br/>(every claim links to a real entry)
+```
 
 Built FastAPI + HTMX + SSE over the JSONL ledger — the ledger *is* the event
 store, tailed live. No broker, no JS build. See [`web/README.md`](../web/README.md).
+
+<details>
+<summary><b>v1 — the operations console we corrected</b></summary>
+
+<br/>The first cut (a real screenshot of `web/app.py`): an approvals inbox, loop
+health, a trust percentage, insider vocabulary, all on one crammed page. It was
+the market's control-plane genre — a place to *operate* the agent instead of
+*understand* it. The correction and its reasoning:
+[the cognitive lineage](lineage/2026-07-15-ui-comprehension-reflection.md).
+
+<p align="center"><img src="assets/ui-dashboard.png" width="760" alt="v1 dashboard (superseded)"/></p>
+</details>
 
 ---
 

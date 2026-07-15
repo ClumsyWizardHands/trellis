@@ -82,17 +82,39 @@ flowchart LR
     class S,R,A,M,V step
 ```
 
-### How it looks and functions — the real web UI
+### How it looks and functions — a comprehension-and-reflection portal
 
-A screenshot of the actual running dashboard (`web/app.py`) over a demo ledger:
-the approvals inbox (nothing sends without your yes), decisions with lineage (the
-hidden-no flagged red), loop health, trust *verified by others — never itself*,
-the agent roster, the activity story, and the self-image panel with its honest
-"why." Built FastAPI + HTMX + SSE over the JSONL ledger — no broker, no JS build.
+The UI is **not** an operations console. The work lives in Discord and email;
+this surface exists to make the invisible (the verifier agents, the loops, the
+coordination you never see in Discord) legible in plain terms — and to be the
+room where the agent reflects on itself each day. Its heart is the **Reflection**
+page: the agent's daily self-image beside yesterday's, every trait tied to real
+**cited** events, and any change it wants to make to itself going through a
+checker — a proposal, not a vibe.
 
 <p align="center">
-  <img src="docs/assets/ui-dashboard.png" width="820" alt="the trellis web UI"/>
+  <img src="docs/assets/ui-reflection-mockup.png" width="880" alt="the reframed trellis UI — the Reflection room"/>
 </p>
+
+<sub>A mockup of the reframed design (a side nav of self-explaining pages; the
+Reflection room at the centre). The vision → [`docs/ROADMAP-UI-SPINE.md`](docs/ROADMAP-UI-SPINE.md).
+Why it changed → [the cognitive lineage of the correction](docs/lineage/2026-07-15-ui-comprehension-reflection.md).</sub>
+
+<details>
+<summary><b>v1 — the operations console we corrected (and why it was wrong)</b></summary>
+
+<br/>The first cut shipped as a single-page ops dashboard: an approvals inbox, a
+health board, a trust percentage, insider vocabulary. It was the market's generic
+control-plane genre — and wrong in an instructive way. It built a place to
+*operate* the agent when the whole point is to *understand* it (the exact failure
+the founding brief warned against: "people don't know what it means"). Kept here
+as the anti-example that produced the reframe above — anti-examples are the fuel.
+
+<p align="center"><img src="docs/assets/ui-dashboard.png" width="720" alt="v1 dashboard (superseded)"/></p>
+
+The working code (`web/app.py`, FastAPI + HTMX + SSE over the JSONL ledger) still
+runs; the *design* is being rebuilt to the portal above.
+</details>
 
 > 📊 **Full picture book:** [`docs/VISUAL-TOUR.md`](docs/VISUAL-TOUR.md) — the
 > bitemporal ledger, the verifier quorum, the loop/pass state machines, the
