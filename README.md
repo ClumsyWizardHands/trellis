@@ -1,5 +1,106 @@
 # trellis
 
+**Most AI-agent frameworks are built to get tasks done. trellis is built to be
+*trusted* — so the longer it runs, the more you can rely on it, not less.**
+
+In plain terms: it's an **accountable, auditable agent** that keeps a dated
+notebook of every decision, has its work checked by an independent verifier
+(never itself), knows what information is stale, refuses to pretend it's done
+when it isn't, and never sends or changes anything without your yes. It's the
+difference between a fast intern who says "done!" (maybe) and forgets by
+tomorrow, and a trustworthy junior colleague who keeps receipts and gets more
+useful the longer they work with you. → **New here? Read [WHAT-THIS-IS.md](WHAT-THIS-IS.md) first.**
+
+<p align="center">
+  <img src="https://img.shields.io/badge/tests-124%20passing-3fb950?style=flat-square" alt="tests"/>
+  <img src="https://img.shields.io/badge/adversarial-4%20rounds%2C%20converged-58a6ff?style=flat-square" alt="adversarial"/>
+  <img src="https://img.shields.io/badge/core-zero%20runtime%20deps-d29922?style=flat-square" alt="deps"/>
+  <img src="https://img.shields.io/badge/python-3.10%2B-e6edf3?style=flat-square" alt="python"/>
+  <img src="https://img.shields.io/badge/license-MIT-8b949e?style=flat-square" alt="license"/>
+</p>
+
+### The agent draws itself — and the drawing is honest
+
+Every visual property of this creature is a deterministic function of a real
+number in the agent's ledger. It's not a mascot; it's the agent's growth as a
+picture. Same record → same creature. It changes only because the record changed.
+
+<p align="center">
+  <img src="docs/assets/glyph-1-newborn.png" width="130" alt="newborn — pale, unproven"/>
+  &nbsp;<img src="docs/assets/glyph-2-learning.png" width="130" alt="learning"/>
+  &nbsp;<img src="docs/assets/glyph-3-trusted.png" width="130" alt="trusted — warm, calm, crested with verification"/>
+  &nbsp;<img src="docs/assets/glyph-4-wary.png" width="130" alt="wary — muted, many-eyed, flat mouth"/>
+</p>
+<p align="center"><sub><b>newborn</b> (unproven, pale) · <b>learning</b> · <b>trusted</b> (warm, calm, crowned with verification) · <b>wary</b> (muted — pass-rate dropped; many eyes — 4 unresolved triangulations)</sub></p>
+
+### The whole thing at a glance
+
+```mermaid
+flowchart LR
+    subgraph world["the world"]
+        DISCORD["Discord / transcripts"]
+        CAL["calendar"]
+        HUMAN(["a human"])
+    end
+    subgraph trellis["trellis"]
+        direction TB
+        INGEST["ingest<br/>stamp + attribute"]
+        LEDGER[("ledger.jsonl<br/>append-only · bitemporal")]
+        WITNESS["the Witness<br/>sense→resolve→act→verify→remember"]
+        PANEL["verifier panel<br/>cheap independent lenses"]
+        OUTBOX["outbox<br/>stage, never fire"]
+        UI["web UI<br/>legible + self-image glyph"]
+    end
+    DISCORD --> INGEST
+    CAL --> INGEST
+    INGEST --> LEDGER
+    WITNESS <--> LEDGER
+    WITNESS -- claims --> PANEL
+    PANEL -- verdicts --> LEDGER
+    WITNESS -- proposes --> OUTBOX
+    LEDGER --> UI
+    UI -- approve / deny --> HUMAN
+    HUMAN -- the last step before the world --> OUTBOX
+    OUTBOX -- only on a yes --> ACTION["post / send / apply"]
+    classDef store fill:#161b22,stroke:#58a6ff,color:#e6edf3
+    classDef act fill:#0d2818,stroke:#3fb950,color:#e6edf3
+    class LEDGER store
+    class WITNESS,PANEL act
+```
+
+### The working loop — the unit of work is a *recorded, checked judgment*
+
+```mermaid
+flowchart LR
+    E([events]) --> S["SENSE<br/>age-tag everything"]
+    S --> R["RESOLVE<br/>opinions as Y/N/T"]
+    R --> A["ACT<br/>record + stage<br/>(never fire)"]
+    A --> M["REMEMBER<br/>update the read"]
+    M --> V["VERIFY<br/>an independent checker<br/>(maker ≠ verifier)"]
+    V --> D([outcome + verdict<br/>on the record])
+    classDef step fill:#0d2818,stroke:#3fb950,color:#e6edf3
+    class S,R,A,M,V step
+```
+
+### How it looks and functions — the real web UI
+
+A screenshot of the actual running dashboard (`web/app.py`) over a demo ledger:
+the approvals inbox (nothing sends without your yes), decisions with lineage (the
+hidden-no flagged red), loop health, trust *verified by others — never itself*,
+the agent roster, the activity story, and the self-image panel with its honest
+"why." Built FastAPI + HTMX + SSE over the JSONL ledger — no broker, no JS build.
+
+<p align="center">
+  <img src="docs/assets/ui-dashboard.png" width="820" alt="the trellis web UI"/>
+</p>
+
+> 📊 **Full picture book:** [`docs/VISUAL-TOUR.md`](docs/VISUAL-TOUR.md) — the
+> bitemporal ledger, the verifier quorum, the loop/pass state machines, the
+> stage-don't-fire sequence, the adversarial convergence, and the self-image
+> mapping, all as diagrams.
+
+---
+
 **An agent harness that is a trellis, not a soul.**
 
 A trellis is infrastructure a living thing grows on. It is not the plant, it does

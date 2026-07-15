@@ -4,3 +4,4 @@ __pycache__/
 stress/.work/
 examples/.state/
 *.egg-info/
+web/demo/ws/
