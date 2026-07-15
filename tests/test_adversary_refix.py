@@ -86,15 +86,20 @@ def test_44_recovered_loop_not_triaged(ledger):
     reg = LoopRegistry(ledger)
     spec = LoopSpec("recov", "p", "k", max_turns=3, stop_condition="done")
     reg.register(spec, "alex")
-    # down three times, then clean twice — healthy now
-    for out in [Outcome.BLOCKED, Outcome.BLOCKED, Outcome.BLOCKED, Outcome.OK, Outcome.OK]:
+    # DISTINCT transient blocks that each cleared, then two clean runs — genuine
+    # recovery (no single dependency stuck). Contrast test_44 in round4 file:
+    # 3 blocks on the SAME dep → TRIAGE even with trailing oks.
+    deps = ["net", "rate-limit", "disk"]
+    seq = [(Outcome.BLOCKED, deps[0]), (Outcome.BLOCKED, deps[1]),
+           (Outcome.BLOCKED, deps[2]), (Outcome.OK, None), (Outcome.OK, None)]
+    for out, on in seq:
         with LoopRun(spec, reg, actor="w") as run:
             run.tick()
             if out == Outcome.OK:
                 run.ok("recovered", evidence=["x"])
             else:
-                run.blocked(BlockKind.TRANSIENT, on="dep")
-    assert reg.state("recov") == LoopState.ACTIVE   # not falsely triaged
+                run.blocked(BlockKind.TRANSIENT, on=on)
+    assert reg.state("recov") == LoopState.ACTIVE   # distinct transient blocks cleared
 
 
 # ---- #45 direct second __exit__ must not duplicate the outcome -------------
@@ -118,12 +123,18 @@ def test_36_repeated_word_ask_refused():
 
 
 # ---- #46 confusable self-cert (documented table coverage) ------------------
-def test_46_table_confusables_caught(ledger):
-    # the common Cyrillic/Greek lookalikes in the table are caught
-    assert same_identity("witness", "witnеss")   # Cyrillic е
-    assert same_identity("alex", "аlex")          # Cyrillic а
-    # invisible-char self-cert is now caught too (was a survivor vector)
-    assert same_identity("witness", "witn​ess")
+def test_46_identity_is_ascii_allowlist(ledger):
+    from trellis.identity import InvalidIdentityError, require_identity
+    # non-ASCII ids are REFUSED (not folded, not merged) — this closes self-cert
+    # AND avoids wrongly merging distinct real names ('мир' != 'mir').
+    for bad in ("witnеss", "аlex", "мир", "łukasz", "小明", "ᴀᴛʟᴀꜱ"):
+        with pytest.raises(InvalidIdentityError):
+            require_identity(bad)
+    assert not same_identity("mir", "мир")      # distinct scripts never merge
+    assert not same_identity("lukasz", "łukasz")
+    # invisible-char variants of an ASCII id still collapse (a real ascii actor)
+    assert same_identity("witness", "witn​ess")   # ZW stripped, both ascii
+    assert same_identity("WITNESS:A", "witness:a")
 
 
 # ---- #50 synthesis backstop: lazy caught; adversarial is out of scope ------

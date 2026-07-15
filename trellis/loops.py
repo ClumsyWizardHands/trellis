@@ -170,17 +170,35 @@ class LoopRun:
         self._ended = True
         if self._outcome is None:
             if exc is not None:
+                # repr(exc) and format_exception can THEMSELVES raise (an
+                # exception whose __repr__ throws — round 4 #42). Capturing the
+                # detail must never be what stops the outcome from being written.
+                try:
+                    exc_repr = repr(exc)
+                except BaseException:
+                    exc_repr = f"<unreprable {exc_type.__name__ if exc_type else '?'}>"
+                try:
+                    tb_text = "".join(traceback.format_exception(exc_type, exc, tb))[-2000:]
+                except BaseException:
+                    tb_text = "<traceback unavailable>"
                 self._set(Outcome.PROTOCOL_VIOLATION, {
                     "reason": "run raised without reporting an outcome",
-                    "exception": repr(exc),
-                    "traceback": "".join(traceback.format_exception(exc_type, exc, tb))[-2000:],
+                    "exception": exc_repr, "traceback": tb_text,
                 })
             else:
                 self._set(Outcome.PROTOCOL_VIOLATION, {
                     "reason": "run exited without reporting an outcome — a loop "
                               "that says nothing is a loop that failed silently",
                 })
-        self.registry.record_end(self, self._outcome, self._detail)
+        # last resort: even record_end must not be able to swallow the write.
+        try:
+            self.registry.record_end(self, self._outcome, self._detail)
+        except BaseException:
+            try:
+                self.registry.record_end(self, Outcome.PROTOCOL_VIOLATION,
+                                         {"reason": "record_end degraded"})
+            except BaseException:
+                pass  # we tried every way to be loud; never mask the original exc
         return False  # never swallow the exception; loud beats tidy
 
 
@@ -249,6 +267,18 @@ class LoopRegistry:
         blocked = sum(o == Outcome.BLOCKED.value for o in window)
         if blocked >= 3 and trailing_clean < 2:
             return LoopState.TRIAGE
+        # same-dependency stall: >=3 blocks in the window on the SAME `on` means
+        # the dependency never cleared, even if the loop did unrelated side-work
+        # in between (round 4 #44). Side-work oks are not resolution of the block.
+        ends = [e for e in self.ledger.entries()
+                if e.kind == "loop_run_end" and e.body.get("loop") == loop_name]
+        recent_ends = ends[-5:]
+        ons = [e.body.get("on") for e in recent_ends
+               if e.body.get("outcome") == Outcome.BLOCKED.value and e.body.get("on")]
+        if ons:
+            top = max(ons.count(o) for o in set(ons))
+            if top >= 3:
+                return LoopState.TRIAGE
         if len(recent2) == 2 and all(o == Outcome.NOTHING_NEW.value for o in recent2):
             return LoopState.DORMANT       # stop burning budget on quiet
         return LoopState.ACTIVE

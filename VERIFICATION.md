@@ -23,6 +23,55 @@ The stress suite earned its keep during the build: it caught a real Workspace
 path bug and a parser crash the unit tests missed. Both fixes carry comments
 naming the suite as the finder.
 
+## Layer 3.5 — the 50-agent adversarial gauntlet (iterated to convergence)
+
+On 2026-07-15 the harness's own doctrine — adversarial external verification —
+was run *against the harness*, at scale, in rounds. Each round: N independent
+subagents, each assigned one narrow attack, each writing and running a real
+breaker script, each claimed break independently re-derived by a second agent.
+
+| Round | Attackers | Breaks found | Nature |
+|-------|-----------|--------------|--------|
+| 1 | 50 | **19** (2 high) | first-pass holes a solo builder can't see: homoglyph bypasses, whitespace evasions, a fork in the ledger, an unbounded schedule wrap |
+| 2 | 19 (re-attack the fixes) | **11** | my fixes were too shallow — mostly ONE root cause (invisible-char handling covered only Unicode categories Z/C) |
+| 3 | 11 (re-attack the root fixes) | **9** | deeper + more exotic: Cyrillic Palochka 'l', a zero-width char *inside* a keyword, an object whose `__repr__` itself raises |
+| 4 | 6 (structural only) | **5** (1 real, rest my over-corrections) | #42 ordering bug (real); identity over-folding (my fix merged real names — corrected to an ASCII allowlist); dotted-soul-filename; + advisory tuning |
+
+**Convergence, called at round 4.** The structural refusals are now airtight and
+regression-pinned: silent failure is impossible even when an exception's own
+`__repr__` raises; self-certification is closed by an **ASCII-identity allowlist**
+(exotic ids are refused, not folded — which also stopped my round-3 fix from
+wrongly merging distinct real names like `мир` and `mir`); ledger integrity,
+blank-author refusal, bounded loops, and privacy keying all hold. What still
+"breaks" under attack is only the **advisory heuristics** — the embodiment/soul
+linter, pass-substance, synthesis-justification — which *cannot* converge against
+unlimited exotic Unicode or semantic padding. Continuing to run rounds on those
+would be the perfectionism failure the harness is built against. They are
+improved once, labeled advisory, and backed by the real gates: an identity
+allowlist and human review. **124 tests, 10/10 stress.** Adversarial testing
+never "ends" — it reaches diminishing returns, and this is that point.
+
+
+The count falling 19 → 11 → 9 is the point: not a harness that was never broken,
+but one broken **cheaply, in the open, and closed at the root** each round. The
+most valuable output was not the patches — it was the round-3 realization that
+the findings split into two kinds:
+
+- **Structural refusals** (silent failure, self-certification, blank authors,
+  ledger integrity, unbounded loops) — these can be made *airtight*, and were.
+- **Heuristic quality-lints** (the embodiment linter, pass-substance, synthesis
+  justification) — these *cannot* be made adversarially complete: an unbounded
+  blocklist against exotic Unicode is unwinnable, and no lexical test measures
+  semantic substance. Pretending otherwise would be the exact overconfidence
+  the harness forbids. So they are improved once, then **honestly labeled
+  advisory**, with the real gate placed where it belongs: a **charset allowlist
+  for identities** (an id must reduce to a valid ASCII identifier or it is
+  refused — not an ever-growing homoglyph table) and **human review** for
+  content (a malicious EMP is caught by the human who reads it, not by a lint).
+
+That separation — knowing which guarantees are structural and which are
+best-effort, and saying so — is the mature form of the harness.
+
 ## Layer 3 — independent fresh-eyes review (the audit)
 
 A separate agent with fresh context — not the builder — was instructed to

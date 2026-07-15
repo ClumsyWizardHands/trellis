@@ -47,11 +47,18 @@ _BOILERPLATE = {
 # single-token test never matches "for later" and pure-filler prose like
 # "todo notes misc for later just in case" slips through (#50 round 3).
 _BOILERPLATE_WORDS = {w for phrase in _BOILERPLATE for w in phrase.split()}
-# Common filler — a justification made ONLY of these has said nothing.
+# Common filler — a justification made ONLY of these has said nothing. Includes
+# discourse adverbs/connectives (round 4 #50: "basically actually obviously
+# certainly essentially generally speaking" is vacuous, not substantive).
 _FILLER = {
     "this", "is", "a", "an", "the", "that", "we", "want", "to", "keep", "it",
     "here", "for", "of", "and", "or", "so", "thing", "stuff", "need", "have",
     "be", "will", "can", "should", "there", "some", "just", "really", "very",
+    "basically", "actually", "obviously", "certainly", "essentially",
+    "generally", "speaking", "well", "anyway", "however", "therefore",
+    "moreover", "furthermore", "perhaps", "indeed", "quite", "somewhat",
+    "literally", "honestly", "simply", "clearly", "definitely", "probably",
+    "maybe", "kind", "sort", "like", "stuff", "things", "important", "note",
 }
 
 

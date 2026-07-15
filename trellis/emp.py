@@ -83,6 +83,17 @@ EMBODIMENT_PATTERNS: list[tuple[str, str]] = [
     (r"\bmy (?:body|hands|eyes|ears|heart|soul|nose|tongue)\b", "claims a body"),
     (r"\bi am (?:alive|conscious|sentient)\b", "claims sentience"),
     (r"\bas a (?:person|human)\b", "claims humanity"),
+    # soul/persona DECLARATIONS in the identity body (round 4 #17A). Advisory —
+    # a filename can be benign while the content declares a soul. This catches
+    # the obvious cases; a human reviewing the EMP is the real gate.
+    (r"\b(?:eternal|immortal) soul\b", "declares a soul"),
+    (r"\bmy soul\b", "declares a soul"),
+    (r"\bsoul (?:given|within|remembers)\b", "declares a soul"),
+    (r"\bpast lives\b", "declares a soul"),
+    (r"\breincarnat", "declares a soul"),
+    (r"\bgiven human form\b", "declares embodiment"),
+    (r"\bthis persona\b", "declares a persona"),
+    (r"\bthe spirit within\b", "declares a spirit"),
 ]
 
 
@@ -194,7 +205,9 @@ def load_emp(path: Path | str, strict: bool = True) -> EMP:
             f"refusing to load {p.name!r}: EMP filenames must be ASCII. A "
             "non-ASCII name is either a homoglyph attack or needs a plain "
             "rename — trellis will not guess. See docs/no-soul.md")
-    stem = fold_text(p.stem)   # then catch ASCII soul-words (SOUL.md, soul-x.md)
+    # strip separators before the substring check so 's.o.u.l.md' and
+    # 's_o_u_l.md' can't hide the word (round 4 #17B).
+    stem = re.sub(r"[^a-z0-9]", "", fold_text(p.stem))
     if any(s in stem for s in FORBIDDEN_STEMS):
         raise SoulRefusalError(
             f"refusing to load {p.name!r}: trellis agents do not have a "

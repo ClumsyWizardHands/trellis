@@ -208,12 +208,14 @@ def test_45_loop_run_single_use(ledger):
 
 # ---- #46 MEDIUM: homoglyph self-certification -----------------------------
 def test_46_homoglyph_self_cert(ledger):
+    from trellis.identity import InvalidIdentityError
     claim = CompletionClaim(maker="witness", task="t", summary="s",
                             evidence=[Evidence(EvidenceKind.OUTPUT, "x")])
-    # 'witnеss' with a Cyrillic е must still be caught as the same actor
-    with pytest.raises(SelfCertificationError):
+    # 'witnеss' with a Cyrillic е is now REFUSED as an id (non-ASCII), which
+    # closes self-cert AND avoids wrongly merging distinct real names. Either
+    # error is acceptable — the attack (self-verify) cannot proceed.
+    with pytest.raises((SelfCertificationError, InvalidIdentityError)):
         RuleVerifier("witnеss", ledger).verify(claim)
-    assert same_identity("witness", "witnеss")
 
 
 # ---- #48 LOW: directory as FILE evidence ----------------------------------

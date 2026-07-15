@@ -59,19 +59,33 @@ def _strip_invisible(s: str) -> str:
 
 
 def _fold(s: str) -> str:
-    """NFKC (folds long-s, fullwidth, subscripts, ligatures) → confusable
-    table → strip invisibles → casefold. Invisible chars are removed so a
-    homoglyph hiding a zero-width joiner ('so‍ul') folds to its bare form."""
+    """CONTENT fold (soul-file, embodiment linter): NFKD → confusable table →
+    strip invisibles → casefold. Confusables ARE folded here because for content
+    DETECTION we want 'ѕo‍ul' to become 'soul' — aggressive folding is correct
+    when the goal is to catch a disguised word."""
     s = unicodedata.normalize("NFKD", s or "")
     s = s.translate(_CONF_TABLE)
     s = _strip_invisible(s)
     return s.casefold()
 
 
+def _fold_identity(s: str) -> str:
+    """IDENTITY fold: NFKD → strip invisibles → casefold, but NO confusable
+    table. Round 4 showed the table over-merges DISTINCT real names ('мир' →
+    'mir', 'łukasz' → 'lukasz'), wrongly rejecting an honest independent
+    verifier. For identity, folding confusables is the wrong move — an id must
+    be a real ASCII identifier, and anything else is refused, not guessed."""
+    s = unicodedata.normalize("NFKD", s or "")
+    s = _strip_invisible(s)
+    return s.casefold()
+
+
 def normalize_identity(s: str) -> str:
-    """Canonical identity string. 'WITNESS:A', ' witness:a ', 'witnеss:a'
-    (Cyrillic), and any invisible-char variant all collapse to one value."""
-    folded = _fold(s)
+    """Canonical id: 'WITNESS:A', ' witness:a ', and any invisible-char variant
+    collapse to one value. Non-ASCII letters are dropped (they can't be part of
+    a canonical ASCII id) — use require_identity() to REJECT rather than silently
+    mangle them."""
+    folded = _fold_identity(s)
     return re.sub(r"[^a-z0-9:_/-]+", "", folded.strip())
 
 
@@ -81,22 +95,32 @@ def same_identity(a: str, b: str) -> bool:
 
 
 class InvalidIdentityError(ValueError):
-    """An identity string that does not reduce to a usable ASCII identifier —
-    an id made entirely of exotic glyphs folds to empty, and an empty id can't
-    be reasoned about (it made same_identity non-reflexive, the #46 hole).
-    Reject it at the gate instead of silently treating it as a distinct actor."""
+    """An identity string that is not a usable ASCII identifier. Rejecting these
+    at the gate — rather than folding or silently mangling them — is the
+    structural answer to the homoglyph arms race (round 4 #46): self-cert is
+    closed (exotic ids are refused, not reasoned about) AND distinct real names
+    are never wrongly merged."""
+
+
+def _has_nonascii_letter(s: str) -> bool:
+    return any(ch.isalpha() and not ch.isascii() for ch in _fold_identity(s))
 
 
 def require_identity(s: str, role: str = "identity") -> str:
-    """Return the canonical id, or raise if it doesn't reduce to a valid one.
-    This is the structural answer to the homoglyph arms race: an agent/human id
-    must be ASCII-reducible and registerable, not an ever-growing blocklist."""
+    """Return the canonical ASCII id, or raise. Agent/human ids MUST be ASCII;
+    a non-ASCII name must be registered with an ASCII canonical id by the
+    deployment (see IdentityRegistry in docs). This makes identity an allowlist,
+    not a blocklist — the only defense that actually converges."""
+    if _has_nonascii_letter(s):
+        raise InvalidIdentityError(
+            f"{role} {s!r} contains non-ASCII letters — agent ids must be ASCII. "
+            "Register a canonical ASCII id for a non-ASCII display name rather "
+            "than letting the harness guess whether two scripts mean the same actor.")
     canon = normalize_identity(s)
     if not canon:
         raise InvalidIdentityError(
-            f"{role} {s!r} does not reduce to a valid identifier — ids must be "
-            "ASCII letters/digits (exotic glyphs that fold to nothing are "
-            "refused, not treated as a new actor)")
+            f"{role} {s!r} does not reduce to a valid identifier — ids must "
+            "contain ASCII letters or digits.")
     return canon
 
 
