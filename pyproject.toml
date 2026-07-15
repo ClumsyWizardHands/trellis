@@ -1,0 +1,25 @@
+[project]
+name = "trellis-harness"
+version = "0.1.0"
+description = "An agent harness that is a trellis, not a soul — infrastructure for contextual-witness agents built from a recorded failure doctrine."
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+authors = [{ name = "Alex Crowell" }]
+# The core has ZERO runtime dependencies (DECISIONS.md D11).
+dependencies = []
+
+[project.optional-dependencies]
+claude = ["claude-agent-sdk>=0.1", "anyio>=4"]
+dev = ["pytest>=8"]
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = ["trellis*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
