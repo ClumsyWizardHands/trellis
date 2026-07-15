@@ -23,6 +23,7 @@ respawned worker reads to pick up where things stand.
 from __future__ import annotations
 
 import json
+import re
 import uuid
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -93,16 +94,25 @@ class Pass:
 
     def _validate(self) -> None:
         ask_words = self.ask.split()
-        if len(ask_words) < MIN_ASK_WORDS:
+        # substance, not just token count: "do it now ok pls" and "a b c d e"
+        # and "..... ." are five "words" but no ask (found by the adversary, #36).
+        meaningful = [w for w in ask_words if len(re.sub(r"\W", "", w)) >= 2]
+        if len(ask_words) < MIN_ASK_WORDS or len(meaningful) < 3 or \
+                len(re.sub(r"\W", "", self.ask)) < 12:
             raise TurdDropError(
-                f"a pass needs a clear ask (got {len(ask_words)} words). State "
-                "what the receiver should DO, by when, and what done looks like.")
+                f"a pass needs a clear ask with substance (got {len(ask_words)} "
+                f"words, {len(meaningful)} meaningful). State what the receiver "
+                "should DO, by when, and what done looks like.")
         if not self.context.strip():
             raise TurdDropError(
                 "a pass with no context makes the receiver reconstruct your "
                 "thinking — write the 50-90% of their prompt you owe them")
         if not self.receiver.strip():
             raise TurdDropError("a pass needs a named receiver")
+        if self.deadline is not None and self.deadline.tzinfo is None:
+            raise TurdDropError(
+                "a naive (timezone-less) deadline is refused — it crashes the "
+                "overdue check and lies about time (#38)")
 
     # ----- lifecycle --------------------------------------------------------
 
@@ -128,9 +138,14 @@ class Pass:
             raise ValueError(
                 f"only the {side} ({required!r}) may move a pass to {to.value} "
                 f"— {actor!r} is not the {side}")
+        # record the CANONICAL identity, not the raw input: a confusable that
+        # resolved to the authorized party shouldn't leave a foreign-looking
+        # string in the audit trail (found by the adversary, #37).
+        recorded_actor = required if side else actor
         self.history.append({
             "from": self.status.value, "to": to.value,
-            "actor": actor, "at": ground.now().isoformat(), "note": note,
+            "actor": recorded_actor, "actor_typed": actor,
+            "at": ground.now().isoformat(), "note": note,
         })
         self.status = to
 

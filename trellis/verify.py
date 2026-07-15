@@ -125,10 +125,16 @@ class RuleVerifier:
         for ev in claim.evidence:
             if ev.kind == EvidenceKind.FILE:
                 p = Path(ev.ref)
+                # is_file(), not exists(): a directory is not the file the
+                # claim says it produced (found by the adversary, #48). Also
+                # resolves symlinks, so a dangling link fails honestly.
+                is_file = p.is_file()
                 checks.append(Check(
                     name=f"file exists: {ev.ref}",
-                    passed=p.exists(),
-                    detail="" if p.exists() else "claimed file does not exist",
+                    passed=is_file,
+                    detail="" if is_file else
+                           ("path is a directory, not a file" if p.is_dir()
+                            else "claimed file does not exist"),
                 ))
             elif ev.kind == EvidenceKind.LEDGER:
                 if self.ledger is None:

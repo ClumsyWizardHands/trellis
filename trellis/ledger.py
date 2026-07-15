@@ -53,7 +53,10 @@ class Entry:
         }
         if self.supersedes:
             d["supersedes"] = self.supersedes
-        return json.dumps(d, ensure_ascii=False)
+        # default=str: a non-JSON value in a body (an enum, a datetime, an
+        # exception) must NEVER stop an entry from being written — that would
+        # turn a loop outcome into a silent failure, the cardinal sin (#42).
+        return json.dumps(d, ensure_ascii=False, default=str)
 
     @staticmethod
     def from_json(line: str) -> "Entry":
@@ -92,8 +95,16 @@ class Ledger:
     ) -> Entry:
         if not author or not author.strip():
             raise LedgerIntegrityError("author is required — no anonymous memory")
-        if supersedes is not None and self.get(supersedes) is None:
-            raise LedgerIntegrityError(f"supersedes unknown entry: {supersedes}")
+        if supersedes is not None:
+            if self.get(supersedes) is None:
+                raise LedgerIntegrityError(f"supersedes unknown entry: {supersedes}")
+            existing = self._superseder_of(supersedes)
+            if existing is not None:
+                # corrections form a CHAIN, not a fork: two live heads for one
+                # lineage is a contradictory belief state (found by #14).
+                raise LedgerIntegrityError(
+                    f"{supersedes} is already superseded by {existing} — correct "
+                    "the current head, not a stale entry")
         entry = Entry(
             id=uuid.uuid4().hex[:12],
             kind=kind,
@@ -140,6 +151,12 @@ class Ledger:
         for e in self.entries():
             if e.id == entry_id:
                 return e
+        return None
+
+    def _superseder_of(self, entry_id: str) -> Optional[str]:
+        for e in self.entries():
+            if e.supersedes == entry_id:
+                return e.id
         return None
 
     def current(self, kind: Optional[str] = None) -> list[Entry]:
@@ -196,7 +213,7 @@ class Ledger:
         con.execute("CREATE VIRTUAL TABLE ix USING fts5(id, text)")
         con.executemany(
             "INSERT INTO ix VALUES (?, ?)",
-            [(e.id, f"{e.kind} {' '.join(e.tags)} {json.dumps(e.body, ensure_ascii=False)}")
+            [(e.id, f"{e.kind} {' '.join(e.tags)} {json.dumps(e.body, ensure_ascii=False, default=str)}")
              for e in entries],
         )
         safe = " ".join(re.findall(r"\w+", query)) or query

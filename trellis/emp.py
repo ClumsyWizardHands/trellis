@@ -34,6 +34,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional
 
+from .identity import fold_text, is_effectively_blank
+
 FORBIDDEN_STEMS = {"soul", "persona", "character", "spirit", "heart", "ego"}
 
 HONEST_IDENTITY = (
@@ -45,11 +47,18 @@ HONEST_IDENTITY = (
 
 #: Embodiment-hallucination patterns. Matching text in an identity/prompt file is
 #: a lint violation: an agent describing a body it does not have.
+# Nouns that make "I can see/hear X" honest tool-perception rather than an
+# embodiment claim. If one appears within a few words of the verb, don't flag.
+_PERCEPTION_OK = (r"(file|files|log|logs|ledger|record|records|data|output|"
+                  r"diff|entry|entries|thread|threads|message|messages|"
+                  r"pattern|patterns|transcript|transcripts|recording|"
+                  r"screenshot|that\b|why\b|how\b|what\b)")
 EMBODIMENT_PATTERNS: list[tuple[str, str]] = [
-    (r"\bI (can |could )?(see|watch|look at)\b(?! (the|a|this) (file|log|ledger|record|data|output|diff|entry))",
+    # "I can see X" is flagged UNLESS a data-noun appears within ~6 words (#20).
+    (rf"\bI (?:can |could )?(?:see|watch|look at)\b(?!(?:\s+\S+){{0,6}}?\s+{_PERCEPTION_OK})",
      "claims sight"),
     (r"\blet me eyeball\b", "claims sight"),
-    (r"\bI (can |could )?(hear|listen to)\b(?! (the|a) (transcript|recording|audio file))",
+    (rf"\bI (?:can |could )?(?:hear|listen to)\b(?!(?:\s+\S+){{0,6}}?\s+{_PERCEPTION_OK})",
      "claims hearing"),
     (r"\bI feel (?!that\b|like the evidence|the need to flag)", "claims felt emotion"),
     (r"\bmy (body|hands|eyes|ears|heart|soul)\b", "claims a body"),
@@ -75,12 +84,16 @@ class LintViolation:
 
 
 def lint_identity(text: str) -> list[LintViolation]:
+    # Collapse ALL whitespace (spaces, tabs, newlines) before matching, so
+    # "I  can\tsee" and "I can\nsee" can't slip a sensory claim past the
+    # single-space patterns (found by the adversary, #18). Confusable-fold too,
+    # so a Cyrillic-lettered claim can't hide either.
+    collapsed = re.sub(r"\s+", " ", fold_text(text)).strip()
     violations = []
-    for lineno, line in enumerate(text.splitlines(), 1):
-        for pat, label in EMBODIMENT_PATTERNS:
-            m = re.search(pat, line, flags=re.IGNORECASE)
-            if m:
-                violations.append(LintViolation(pat, label, line.strip()[:120], lineno))
+    for pat, label in EMBODIMENT_PATTERNS:
+        for m in re.finditer(pat, collapsed, flags=re.IGNORECASE):
+            excerpt = collapsed[max(0, m.start() - 10):m.start() + 40]
+            violations.append(LintViolation(pat, label, excerpt, 0))
     return violations
 
 
@@ -104,10 +117,11 @@ class EMP:
                 "required, and only the human may author them")
         if not self.principles:
             raise EMPValidationError("an EMP with no principles cannot hold an opinion")
-        if not self.authored_by:
+        if is_effectively_blank(self.authored_by):
             raise EMPValidationError(
                 "ends must carry their human author (authored_by) — loops are "
-                "forbidden to infer ends")
+                "forbidden to infer ends (whitespace / zero-width authorship is "
+                "still no author, #19)")
         violations = lint_identity(self.identity)
         if violations and strict:
             details = "; ".join(f"L{v.line} {v.label}: {v.excerpt!r}" for v in violations)
@@ -146,7 +160,9 @@ def load_emp(path: Path | str, strict: bool = True) -> EMP:
     five months (SOUL.md survived a June decision into July); the loader is
     where the line actually holds."""
     p = Path(path)
-    stem = p.stem.lower()
+    # confusable-fold the stem before the check: "ѕoul.md" (Cyrillic ѕ) used to
+    # sail past a raw ASCII substring test (found by the adversary, #17).
+    stem = fold_text(p.stem)
     if any(s in stem for s in FORBIDDEN_STEMS):
         raise SoulRefusalError(
             f"refusing to load {p.name!r}: trellis agents do not have a "

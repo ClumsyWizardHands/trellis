@@ -151,6 +151,13 @@ class LoopRun:
     # ----- the guarantee ----------------------------------------------------
 
     def __enter__(self) -> "LoopRun":
+        # single-use: re-entering a finished run used to emit duplicate
+        # loop_run_end records with the same run_id (found by the adversary, #45).
+        if getattr(self, "_used", False):
+            raise RuntimeError(
+                f"LoopRun {self.run_id} is single-use — a run is one bounded "
+                "attempt; start a new LoopRun for another attempt")
+        self._used = True
         self.registry.record_start(self)
         return self
 
@@ -215,10 +222,16 @@ class LoopRegistry:
         return [e.body["outcome"] for e in ends[-n:]]
 
     def state(self, loop_name: str) -> LoopState:
-        recent = self.recent_outcomes(loop_name, n=2)
-        if len(recent) == 2 and all(o == Outcome.BLOCKED.value for o in recent):
-            return LoopState.TRIAGE        # block-loop breaker
-        if len(recent) == 2 and all(o == Outcome.NOTHING_NEW.value for o in recent):
+        recent2 = self.recent_outcomes(loop_name, n=2)
+        if len(recent2) == 2 and all(o == Outcome.BLOCKED.value for o in recent2):
+            return LoopState.TRIAGE        # two consecutive blocks
+        # rolling breaker: a loop that blocks a majority of a recent window is
+        # thrashing even if it sneaks an ok() between blocks to reset the
+        # consecutive counter (found by the adversary, #44).
+        window = self.recent_outcomes(loop_name, n=5)
+        if len(window) >= 4 and sum(o == Outcome.BLOCKED.value for o in window) >= 3:
+            return LoopState.TRIAGE
+        if len(recent2) == 2 and all(o == Outcome.NOTHING_NEW.value for o in recent2):
             return LoopState.DORMANT       # stop burning budget on quiet
         return LoopState.ACTIVE
 

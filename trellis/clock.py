@@ -110,7 +110,7 @@ class TimeGround:
 
     def freshness(self, event_time: datetime, volatility: str = "fact") -> float:
         half_life = HALF_LIVES.get(volatility, HALF_LIVES["fact"])
-        age = self.now() - event_time
+        age = self._elapsed(event_time)
         if age.total_seconds() <= 0:
             return 1.0
         return 0.5 ** (age.total_seconds() / half_life.total_seconds())
@@ -125,8 +125,15 @@ class TimeGround:
             return Staleness.STALE
         return Staleness.EXPIRED
 
+    def _elapsed(self, event_time: datetime) -> timedelta:
+        """TRUE elapsed time. Python subtracts SAME-zone aware datetimes by
+        wall clock, silently ignoring a DST jump (found by the adversary, #1).
+        Converting both to UTC first gives real elapsed seconds."""
+        return (self.now().astimezone(timezone.utc)
+                - event_time.astimezone(timezone.utc))
+
     def age_phrase(self, event_time: datetime) -> str:
-        delta = self.now() - event_time
+        delta = self._elapsed(event_time)
         secs = int(delta.total_seconds())
         if secs < 0:
             return "in the future"
@@ -188,7 +195,12 @@ class Schedule:
         now = ground.now()
         if self.active_hours is not None:
             lo, hi = self.active_hours
-            if not (lo <= now.hour < hi):
+            h = now.hour
+            # a window may WRAP midnight, e.g. (22, 6) = 10pm..6am. The old
+            # `lo <= h < hi` made every wrapping window empty, so the schedule
+            # never fired (found by the adversary, #7 HIGH).
+            in_window = (lo <= h < hi) if lo <= hi else (h >= lo or h < hi)
+            if not in_window:
                 return False
         if not self.firings:
             return True

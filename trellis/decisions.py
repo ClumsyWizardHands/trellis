@@ -26,6 +26,7 @@ from enum import Enum
 from typing import Optional
 
 from .clock import TimeGround
+from .identity import is_effectively_blank
 from .ledger import Ledger, Entry
 
 
@@ -69,14 +70,25 @@ class Decision:
     id: str = field(default_factory=lambda: uuid.uuid4().hex[:12])
 
     def __post_init__(self):
+        # coerce/validate the verdict FIRST. A raw string like "t" or "maybe"
+        # used to sail past the T-guard and then crash to_body() on .value
+        # (found by the adversary, #27 HIGH).
+        if not isinstance(self.verdict, Verdict):
+            try:
+                self.verdict = Verdict(str(self.verdict))
+            except ValueError:
+                raise ValueError(
+                    f"unknown verdict {self.verdict!r} — use Verdict.Y/N/T "
+                    "(uppercase Y, N, or T)")
         if not self.subject.strip():
             raise ValueError("a decision needs a subject")
         if not self.rationale.strip():
             raise ValueError("a decision without a rationale is a vibe")
-        if not self.emp_lineage.strip():
+        if is_effectively_blank(self.emp_lineage):
             raise ValueError(
                 "every decision carries lineage back to an EMP node — "
-                "orphan decisions stuck in silos are the named failure mode")
+                "orphan decisions stuck in silos are the named failure mode "
+                "(whitespace / zero-width lineage is still an orphan)")
         if self.verdict == Verdict.T:
             named = {p.holder.strip().lower() for p in self.povs}
             if len(named) < 3:
@@ -170,7 +182,9 @@ class DecisionLog:
         entries = {e.body.get("decision_id"): e for e in self.ledger.entries()
                    if e.kind == self.KIND}
         cur = entries.get(decision_id)
-        while cur is not None:
+        seen: set[str] = set()   # a parent_id cycle used to loop forever (#25)
+        while cur is not None and cur.body["decision_id"] not in seen:
+            seen.add(cur.body["decision_id"])
             chain.append({
                 "decision_id": cur.body["decision_id"],
                 "subject": cur.body["subject"],

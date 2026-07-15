@@ -43,16 +43,33 @@ _BOILERPLATE = {
     "important", "context", "for later", "might need", "just in case",
     "n/a", "na", "none", "misc", "notes", "memory", "todo",
 }
+# Common filler — a justification made ONLY of these has said nothing.
+_FILLER = {
+    "this", "is", "a", "an", "the", "that", "we", "want", "to", "keep", "it",
+    "here", "for", "of", "and", "or", "so", "thing", "stuff", "need", "have",
+    "be", "will", "can", "should", "there", "some", "just", "really", "very",
+}
 
 
 def _fails_synthesis(justification: str) -> Optional[str]:
+    """A HEURISTIC BACKSTOP, not a proof. No text test can verify that content
+    is genuinely irreducible — a determined writer can pad a meaningful-looking
+    sentence past any filter. The real gate is the human who reads the ledger's
+    memory_write entries. This catches the lazy 90%, not the adversarial 10%
+    (found by the adversary, #50 — honestly labelled rather than oversold)."""
     j = justification.strip().lower()
+    words = re.findall(r"\w+", j)
     if len(j.split()) < 6:
         return ("synthesis test requires a real answer (>=6 words) to: why "
                 "couldn't a future agent re-derive this from existing sources "
                 "(ledger, transcripts, logs, git)?")
-    if j in _BOILERPLATE or all(w in _BOILERPLATE for w in re.findall(r"\w+", j)):
+    if j in _BOILERPLATE or all(w in _BOILERPLATE for w in words):
         return "synthesis test answered with boilerplate — refuse and re-derive instead"
+    # lexical substance: at least 4 distinct non-filler words of length >= 3
+    substantive = {w for w in words if len(w) >= 3 and w not in _FILLER}
+    if len(substantive) < 4:
+        return ("synthesis justification is filler — name the specific thing "
+                "that exists nowhere else and why it can't be re-derived")
     return None
 
 
