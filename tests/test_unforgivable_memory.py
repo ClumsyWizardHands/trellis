@@ -88,7 +88,7 @@ def test_empty_flush_is_legitimate_but_recorded(tmp_path, ledger):
 
 def test_epitaph_the_agent_dies_the_record_survives(tmp_path, ledger):
     ws = Workspace(tmp_path / "ws", ledger)
-    ws.epitaph("s3", "witness:atlas",
+    ws.epitaph("s3", "witness",
                what_happened="read three transcripts, formed two opinions",
                what_was_learned="Peter's ask pattern is findability, not features",
                open_threads=["confirm pricing canon with Brett"])

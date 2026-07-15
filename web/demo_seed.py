@@ -42,21 +42,21 @@ def seed_ledger() -> Ledger:
     ws = Workspace(demo / "ws", L)
 
     log.record(Decision("Treat time-blindness as an asset, not just a defect", Verdict.Y,
-        "Brett's July framing supersedes the April 'eliminate' framing", "witness:atlas",
+        "Brett's July framing supersedes the April 'eliminate' framing", "witness",
         "EMP:ends[0]"), event_time=at(1))
     log.record(Decision("Auto-post the morning digest to #chiefs", Verdict.N,
-        "stage-don't-fire is doctrine; nothing auto-posts", "witness:atlas",
+        "stage-don't-fire is doctrine; nothing auto-posts", "witness",
         "EMP:principles[0]", returnable_note="reopen if team ratifies autonomous posting"),
         event_time=at(0, 3))
     povs = [POV("brett", "memory beside the agent; the agent dies"),
             POV("clare", "mount the protocol folder; server-wide memory"),
             POV("sarah", "workflow-first; route around the unreliable agent")]
     log.record(Decision("Memory: on the agent or beside it?", Verdict.T,
-        "live architectural fork the team is building in opposite directions on", "witness:atlas",
+        "live architectural fork the team is building in opposite directions on", "witness",
         "EMP:principles[1]", povs=povs, owner="alex", missing="a cost comparison",
         revisit_at=at(-4)), event_time=at(2))
     log.record(Decision("System of record: Obsidian vs Drive vs ledger", Verdict.T,
-        "deferred in favour of verification, but still unsettled", "witness:atlas",
+        "deferred in favour of verification, but still unsettled", "witness",
         "EMP:means[0]", povs=povs, owner="alex", missing="whether verification changes it",
         revisit_at=at(2)), event_time=at(9))
 
@@ -64,28 +64,28 @@ def seed_ledger() -> Ledger:
         ("read/current-read.md", "the current synthesized read exists nowhere else"),
         ("epitaphs/2026-07-14-s1.md", "session-final open threads exist nowhere else once the window closes"),
         ("skills/end-of-day-harvest.md", "a learned routine the team could not re-derive mechanically")]:
-        ws.write(pth, "content " * 20, "witness:atlas", why)
+        ws.write(pth, "content " * 20, "witness", why)
 
     reg = LoopRegistry(L, g)
-    spec = LoopSpec("atlas.witness", "keep the read current; put opinions on the record",
-                    "witness:atlas__channel__chiefs__-__-", max_turns=6,
+    spec = LoopSpec("witness.watch", "keep the read current; put opinions on the record",
+                    "witness__channel__chiefs__-__-", max_turns=6,
                     stop_condition="read current")
     reg.register(spec, "alex")
-    checker = RuleVerifier("rule-verifier:atlas-check", L, g)
+    checker = RuleVerifier("verifier:witness-check", L, g)
     f = str(demo / "ws" / "read" / "current-read.md")
     for i in range(6):
-        with LoopRun(spec, reg, actor="witness:atlas") as run:
+        with LoopRun(spec, reg, actor="witness") as run:
             run.tick()
             if i == 5:
                 run.nothing_new(checked=["#chiefs", "#general"])
             else:
                 run.ok("recorded opinions; read updated", evidence=[f])
         if i < 5:
-            c = CompletionClaim(maker="witness:atlas", task="keep the read current",
+            c = CompletionClaim(maker="witness", task="keep the read current",
                                 summary="recorded opinions; read updated",
                                 evidence=[Evidence(EvidenceKind.FILE, f)])
             record_verdict(L, c, checker.verify(c))
-    bad = CompletionClaim(maker="witness:atlas", task="x", summary="y",
+    bad = CompletionClaim(maker="witness", task="x", summary="y",
                           evidence=[Evidence(EvidenceKind.FILE, str(demo / "ws" / "nope.md"))])
     record_verdict(L, bad, checker.verify(bad))
 
@@ -93,17 +93,17 @@ def seed_ledger() -> Ledger:
                      max_turns=4, stop_condition="assembled")
     reg.register(spec2, "alex")
     for _ in range(2):
-        with LoopRun(spec2, reg, actor="witness:atlas") as run:
+        with LoopRun(spec2, reg, actor="witness") as run:
             run.tick()
             run.blocked(BlockKind.NEEDS_INPUT, on="pricing canon from Brett")
 
     box = Outbox(L, g)
     box.stage(StagedAction("discord_post", "#chiefs-of-staffs",
         "Read updated: July framing of time-blindness adopted; canvas question is a live T owned by Alex.",
-        created_by="witness:atlas"))
+        created_by="witness"))
     box.stage(StagedAction("email_draft", "peter@turntwo.org",
         "Draft: the CF pricing one-pager (needs your review before it goes anywhere near a CEO).",
-        created_by="witness:atlas"))
+        created_by="witness"))
     return L
 
 
