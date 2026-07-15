@@ -26,6 +26,9 @@ from .verify import RuleVerifier, SelfCertificationError
 from .stage import Outbox, StagedAction, ActionStatus, UnapprovedFireError
 from .memory import Workspace, SynthesisTestError
 from .prompt import assemble_prompt, PromptBudgetExceeded
+from .panel import VerifierPanel, PanelVerdict, panel_as_subagent_specs
+from .ingest import (DiscordMessage, CalendarEvent, ingest_discord, ingest_calendar,
+                     position_history, PositionHistory, temporal_context)
 
 __all__ = [
     "TimeGround", "Staleness",

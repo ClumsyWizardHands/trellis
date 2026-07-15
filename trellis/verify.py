@@ -186,17 +186,35 @@ class ModelVerifier:
         "check the claim, say INSUFFICIENT — do not give the benefit of the doubt."
     )
 
-    def __init__(self, verifier_id: str, provider) -> None:
+    #: Distinct lenses for a panel. Diversity beats redundancy: three verifiers
+    #: asking the same question catch less than three asking different ones
+    #: ("very fragile triangles very strong" — Brett, 2026-03-13).
+    LENSES = {
+        "correctness": "Focus: does the evidence actually establish the claimed OUTCOME, "
+                       "not just activity? Reject 'it ran' as proof 'it worked'.",
+        "freshness": "Focus: TIME. Is the evidence current, or does it rest on stale "
+                     "state? A correct-but-outdated result is REFUTED.",
+        "attribution": "Focus: does every attributed statement/authorship in the evidence "
+                       "actually check out? Misattribution alone is REFUTED.",
+        "reproduce": "Focus: could an independent party re-run the evidence and get the "
+                     "same result? If it is not reproducible from what is given, INSUFFICIENT.",
+    }
+
+    def __init__(self, verifier_id: str, provider, lens: Optional[str] = None) -> None:
         self.id = verifier_id
         self.provider = provider
+        self.lens = lens
+        self._lens_note = self.LENSES.get(lens or "", "") if lens else ""
 
     def verify(self, claim: CompletionClaim) -> Verdict:
         _guard_independence(claim, self.id)
         evidence_text = "\n".join(
             f"- [{e.kind.value}] {e.ref}" + (f" ({e.note})" if e.note else "")
             for e in claim.evidence)
+        system = self.PROMPT + (f"\n\nYOUR LENS ({self.lens}): {self._lens_note}"
+                                if self._lens_note else "")
         reply = self.provider.complete(
-            system=self.PROMPT,
+            system=system,
             messages=[{"role": "user", "content":
                        f"CLAIM by {claim.maker}: {claim.task}\n"
                        f"MAKER'S SUMMARY: {claim.summary}\n"
@@ -209,9 +227,10 @@ class ModelVerifier:
             "REFUTED": VerdictStatus.REFUTED,
         }.get(first, VerdictStatus.INSUFFICIENT)  # unparseable = insufficient, never verified
         return Verdict(claim_id=claim.id, verifier=self.id, status=status,
-                       checks=[Check("model judgment", status == VerdictStatus.VERIFIED,
+                       checks=[Check(f"model judgment ({self.lens or 'general'})",
+                                     status == VerdictStatus.VERIFIED,
                                      (reply.text or "")[:500])],
-                       note="model verifier; refute-oriented prompt")
+                       note=f"model verifier; lens={self.lens or 'general'}; refute-oriented")
 
 
 def record_verdict(ledger: Ledger, claim: CompletionClaim, verdict: Verdict) -> None:
