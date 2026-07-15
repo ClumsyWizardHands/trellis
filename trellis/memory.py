@@ -43,6 +43,10 @@ _BOILERPLATE = {
     "important", "context", "for later", "might need", "just in case",
     "n/a", "na", "none", "misc", "notes", "memory", "todo",
 }
+# word-level boilerplate: the multi-word phrases above must be split, or a
+# single-token test never matches "for later" and pure-filler prose like
+# "todo notes misc for later just in case" slips through (#50 round 3).
+_BOILERPLATE_WORDS = {w for phrase in _BOILERPLATE for w in phrase.split()}
 # Common filler — a justification made ONLY of these has said nothing.
 _FILLER = {
     "this", "is", "a", "an", "the", "that", "we", "want", "to", "keep", "it",
@@ -63,7 +67,7 @@ def _fails_synthesis(justification: str) -> Optional[str]:
         return ("synthesis test requires a real answer (>=6 words) to: why "
                 "couldn't a future agent re-derive this from existing sources "
                 "(ledger, transcripts, logs, git)?")
-    if j in _BOILERPLATE or all(w in _BOILERPLATE for w in words):
+    if j in _BOILERPLATE or (words and all(w in _BOILERPLATE_WORDS for w in words)):
         return "synthesis test answered with boilerplate — refuse and re-derive instead"
     # lexical substance: at least 4 distinct non-filler words of length >= 3
     substantive = {w for w in words if len(w) >= 3 and w not in _FILLER}

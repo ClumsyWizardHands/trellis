@@ -30,6 +30,8 @@ _CONFUSABLES = {
     # Greek
     "ο": "o", "α": "a", "ρ": "p", "ϲ": "c", "ν": "v", "ι": "i", "κ": "k",
     "μ": "m", "τ": "t", "υ": "u", "χ": "x", "ε": "e",
+    # 'l' lookalikes (no NFKD decomposition) — the #17 round-3 gap
+    "ӏ": "l", "Ӏ": "l", "ł": "l", "ǀ": "l", "ן": "l", "׀": "l", "Ⲓ": "l",
 }
 _CONF_TABLE = str.maketrans(_CONFUSABLES)
 
@@ -76,6 +78,26 @@ def normalize_identity(s: str) -> str:
 def same_identity(a: str, b: str) -> bool:
     na, nb = normalize_identity(a), normalize_identity(b)
     return bool(na) and na == nb
+
+
+class InvalidIdentityError(ValueError):
+    """An identity string that does not reduce to a usable ASCII identifier —
+    an id made entirely of exotic glyphs folds to empty, and an empty id can't
+    be reasoned about (it made same_identity non-reflexive, the #46 hole).
+    Reject it at the gate instead of silently treating it as a distinct actor."""
+
+
+def require_identity(s: str, role: str = "identity") -> str:
+    """Return the canonical id, or raise if it doesn't reduce to a valid one.
+    This is the structural answer to the homoglyph arms race: an agent/human id
+    must be ASCII-reducible and registerable, not an ever-growing blocklist."""
+    canon = normalize_identity(s)
+    if not canon:
+        raise InvalidIdentityError(
+            f"{role} {s!r} does not reduce to a valid identifier — ids must be "
+            "ASCII letters/digits (exotic glyphs that fold to nothing are "
+            "refused, not treated as a new actor)")
+    return canon
 
 
 def fold_text(s: str) -> str:

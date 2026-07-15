@@ -53,17 +53,28 @@ class Entry:
         }
         if self.supersedes:
             d["supersedes"] = self.supersedes
-        # An entry must ALWAYS serialize — a non-writable outcome would be a
-        # silent failure, the cardinal sin. default=str handles exotic types;
-        # the try/except also handles CIRCULAR references, which raise BEFORE
-        # default= is ever consulted (the #42 re-attack vector). A pathological
-        # body degrades to its repr rather than blocking the write.
+        # An entry must ALWAYS serialize — a non-writable outcome is a silent
+        # failure, the cardinal sin. Three fallbacks, catching BaseException at
+        # each: (1) normal, default=str for exotic types; (2) body → repr, for
+        # circular refs that raise before default= runs; (3) if even repr()
+        # raises (an object whose __repr__ throws, the #42 round-3 vector), a
+        # minimal record with the body dropped. Something valid ALWAYS gets
+        # written.
         try:
             return json.dumps(d, ensure_ascii=False, default=str)
-        except (ValueError, TypeError, RecursionError):
+        except BaseException:
+            pass
+        try:
             safe = dict(d)
             safe["body"] = {"_unserializable": True, "repr": repr(self.body)[:4000]}
             return json.dumps(safe, ensure_ascii=False, default=str)
+        except BaseException:
+            minimal = {"id": self.id, "kind": self.kind, "author": str(self.author)[:200],
+                       "body": {"_unwritable": True},
+                       **self.stamp.to_dict(), "tags": []}
+            if self.supersedes:
+                minimal["supersedes"] = self.supersedes
+            return json.dumps(minimal, ensure_ascii=False, default=str)
 
     @staticmethod
     def from_json(line: str) -> "Entry":

@@ -237,8 +237,17 @@ class LoopRegistry:
         # block) is healthy and must not be triaged (the #44 re-attack: a
         # false triage of a recovered loop).
         window = self.recent_outcomes(loop_name, n=5)
-        if (window and window[-1] == Outcome.BLOCKED.value
-                and sum(o == Outcome.BLOCKED.value for o in window) >= 3):
+        # recovery requires at least TWO trailing non-blocked runs. A loop that
+        # blocked 4 of 5 with a single trailing (and unverified) ok() has not
+        # recovered — it is thrashing (the #44 round-3 vector). One clean run
+        # after a wall of blocks is not enough to clear TRIAGE.
+        trailing_clean = 0
+        for o in reversed(window):
+            if o == Outcome.BLOCKED.value:
+                break
+            trailing_clean += 1
+        blocked = sum(o == Outcome.BLOCKED.value for o in window)
+        if blocked >= 3 and trailing_clean < 2:
             return LoopState.TRIAGE
         if len(recent2) == 2 and all(o == Outcome.NOTHING_NEW.value for o in recent2):
             return LoopState.DORMANT       # stop burning budget on quiet

@@ -98,14 +98,19 @@ class Pass:
         # and "..... ." are five "words" but no ask (found by the adversary, #36).
         meaningful = [w for w in ask_words if len(re.sub(r"\W", "", w)) >= 2]
         distinct = {w.lower() for w in meaningful}
-        # distinctness too: "review review review review review" is 5 meaningful
-        # words but says one thing five times — no real ask (#36 re-attack).
+        longest = max((len(re.sub(r"\W", "", w)) for w in meaningful), default=0)
+        # This is a BACKSTOP, not a semantic judge — a lexical test can't tell a
+        # real ask from morphological padding ("review reviews reviewed..."); the
+        # receiver rejecting the pass is the true gate. It catches the obvious:
+        # too few / too short / too repetitive / all-tiny-tokens (the last kills
+        # "aa bb cc dd ee ff", #36 round 3).
         if (len(ask_words) < MIN_ASK_WORDS or len(meaningful) < 3
-                or len(distinct) < 3 or len(re.sub(r"\W", "", self.ask)) < 12):
+                or len(distinct) < 3 or longest < 4
+                or len(re.sub(r"\W", "", self.ask)) < 12):
             raise TurdDropError(
                 f"a pass needs a clear ask with substance (got {len(ask_words)} "
-                f"words, {len(distinct)} distinct meaningful). State what the "
-                "receiver should DO, by when, and what done looks like.")
+                f"words, {len(distinct)} distinct, longest {longest}). State what "
+                "the receiver should DO, by when, and what done looks like.")
         if not self.context.strip():
             raise TurdDropError(
                 "a pass with no context makes the receiver reconstruct your "

@@ -52,18 +52,35 @@ HONEST_IDENTITY = (
 # claims escape by appending a data word), BLACKLIST the sensory objects: flag
 # "I can see X" only when X is a thing an agent has no eyes for. Honest
 # "I can see the pattern / that the run passed" has no sensory object → clean.
+# The embodiment linter is an ADVISORY QUALITY LINT, not a security boundary.
+# It cannot be made adversarially complete: an unbounded blocklist of sensory
+# objects will always miss "the sunset over the hills", and a scanner will
+# always be gameable by exotic Unicode. Its job is to catch the ordinary case —
+# a well-meaning author writing "I can see the screen" — so it gets fixed. The
+# real defense against a MALICIOUS EMP is that a human authors and reviews it
+# (see docs/no-soul.md). We broaden coverage and normalize hard, then stop.
 _SIGHT_OBJ = (r"(?:screen|screens|pixel|pixels|monitor|monitors|display|dashboard|"
               r"you|your|me|us|him|her|them|myself|room|image|images|picture|"
-              r"pictures|photo|photos|video|videos|face|faces|world|window|windows)")
-_HEAR_OBJ = r"(?:voice|voices|sound|sounds|music|noise|you|your|room)"
+              r"pictures|photo|photos|video|videos|face|faces|world|window|windows|"
+              r"sunset|sunrise|sky|hills?|whiteboard|keyboard|mouse|light|colou?rs?|"
+              r"view|scene|landscape|building|street|people|person|hand|hands)")
+_HEAR_OBJ = (r"(?:voice|voices|sound|sounds|music|noise|you|your|room|song|"
+             r"footsteps|birds?|rain|silence)")
+_SMELL_OBJ = r"(?:smoke|coffee|food|smell|scent|air|flowers?|rain)"
+_TASTE_OBJ = r"(?:coffee|food|taste|salt|sweet|bitter|wine)"
 EMBODIMENT_PATTERNS: list[tuple[str, str]] = [
     (rf"\bi (?:can |could )?(?:see|watch|look at|looking at) "
      rf"(?:\w+ ){{0,3}}?(?:the |a |this |your |)?{_SIGHT_OBJ}\b", "claims sight"),
     (r"\blet me eyeball\b", "claims sight"),
     (rf"\bi (?:can |could )?(?:hear|listen to|listening to) "
      rf"(?:\w+ ){{0,3}}?(?:the |a |this |your |)?{_HEAR_OBJ}\b", "claims hearing"),
+    (rf"\bi (?:can |could )?smell (?:\w+ ){{0,2}}?(?:the |a |)?{_SMELL_OBJ}\b",
+     "claims smell"),
+    (rf"\bi (?:can |could )?taste (?:\w+ ){{0,2}}?(?:the |a |)?{_TASTE_OBJ}\b",
+     "claims taste"),
     (r"\bi feel (?!that\b|like the evidence|the need to flag)", "claims felt emotion"),
-    (r"\bmy (?:body|hands|eyes|ears|heart|soul)\b", "claims a body"),
+    (r"\bin front of me\b", "claims a physical vantage"),
+    (r"\bmy (?:body|hands|eyes|ears|heart|soul|nose|tongue)\b", "claims a body"),
     (r"\bi am (?:alive|conscious|sentient)\b", "claims sentience"),
     (r"\bas a (?:person|human)\b", "claims humanity"),
 ]
@@ -86,16 +103,22 @@ class LintViolation:
 
 
 def lint_identity(text: str) -> list[LintViolation]:
-    # scan_normalize turns EVERY invisible/format/combining/blank char into a
-    # space (so a zero-width char hidden inside "I​can see" resurfaces the word
-    # boundary — the #18 re-attack vector), folds confusables, collapses
-    # whitespace, and casefolds. Patterns are lowercase to match.
-    scanned = scan_normalize(text)
+    # Two normalizations, because an attacker can hide a zero-width char EITHER
+    # between words ("I​can see" → needs invisible→space) OR inside a keyword
+    # ("scr​een" → needs invisible→removed, the #18 round-3 vector). We scan
+    # both and union, so neither placement evades the lint.
+    scanned = scan_normalize(text)                          # invisible → space
+    joined = re.sub(r"\s+", " ", fold_text(text)).strip()   # invisible → removed
     violations = []
-    for pat, label in EMBODIMENT_PATTERNS:
-        for m in re.finditer(pat, scanned):
-            excerpt = scanned[max(0, m.start() - 10):m.start() + 40]
-            violations.append(LintViolation(pat, label, excerpt, 0))
+    seen = set()
+    for surface in (scanned, joined):
+        for pat, label in EMBODIMENT_PATTERNS:
+            for m in re.finditer(pat, surface):
+                key = (label, m.group(0))
+                if key in seen:
+                    continue
+                seen.add(key)
+                violations.append(LintViolation(pat, label, m.group(0)[:60], 0))
     return violations
 
 
@@ -162,9 +185,16 @@ def load_emp(path: Path | str, strict: bool = True) -> EMP:
     five months (SOUL.md survived a June decision into July); the loader is
     where the line actually holds."""
     p = Path(path)
-    # confusable-fold the stem before the check: "ѕoul.md" (Cyrillic ѕ) used to
-    # sail past a raw ASCII substring test (found by the adversary, #17).
-    stem = fold_text(p.stem)
+    # Charset allowlist beats the homoglyph blocklist race (#17 round 3: a
+    # Cyrillic Palochka 'l' with no NFKD form slipped a "souӏ.md" past the fold).
+    # A real EMP filename is ASCII; a non-ASCII name is a rename request or an
+    # attack, and either way we refuse to load it.
+    if not p.stem.isascii():
+        raise SoulRefusalError(
+            f"refusing to load {p.name!r}: EMP filenames must be ASCII. A "
+            "non-ASCII name is either a homoglyph attack or needs a plain "
+            "rename — trellis will not guess. See docs/no-soul.md")
+    stem = fold_text(p.stem)   # then catch ASCII soul-words (SOUL.md, soul-x.md)
     if any(s in stem for s in FORBIDDEN_STEMS):
         raise SoulRefusalError(
             f"refusing to load {p.name!r}: trellis agents do not have a "
@@ -177,7 +207,11 @@ def load_emp(path: Path | str, strict: bool = True) -> EMP:
     m = re.search(r"^#\s+(.+?)\s*$", text, flags=re.MULTILINE)
     if m:
         name = re.sub(r"\s*—.*$", "", m.group(1)).strip()
-    m = re.search(r"^\s*authored[-_]by:\s*(.+?)\s*$", text, flags=re.MULTILINE | re.IGNORECASE)
+    # horizontal whitespace only ([ \t], not \s): a greedy \s* used to swallow
+    # a blank value + newline and capture the NEXT line ("## Ends") as the
+    # author, sneaking a blank author past is_effectively_blank (#19 round 3).
+    m = re.search(r"^[ \t]*authored[-_]by:[ \t]*(.*?)[ \t]*$", text,
+                  flags=re.MULTILINE | re.IGNORECASE)
     if m:
         authored_by = m.group(1).strip()
 

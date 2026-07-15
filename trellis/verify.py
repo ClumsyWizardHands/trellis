@@ -34,7 +34,7 @@ from pathlib import Path
 from typing import Optional, Protocol
 
 from .clock import TimeGround
-from .identity import same_identity
+from .identity import same_identity, require_identity
 from .ledger import Ledger
 
 
@@ -100,6 +100,12 @@ class Verifier(Protocol):
 
 
 def _guard_independence(claim: CompletionClaim, verifier_id: str) -> None:
+    # both parties must be VALID identities. An id of exotic glyphs folds to
+    # empty, which made same_identity non-reflexive — a small-caps-named agent
+    # could verify itself because 'ᴀᴛʟᴀꜱ' != 'ᴀᴛʟᴀꜱ' after both fold to ""
+    # (#46 round 3). Reject unusable ids rather than reason about them.
+    require_identity(claim.maker, "maker")
+    require_identity(verifier_id, "verifier")
     if same_identity(claim.maker, verifier_id):
         raise SelfCertificationError(
             f"{claim.maker!r} cannot verify its own claim {claim.id} — "
