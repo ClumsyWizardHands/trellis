@@ -1,0 +1,6 @@
+__pycache__/
+*.pyc
+.pytest_cache/
+stress/.work/
+examples/.state/
+*.egg-info/
