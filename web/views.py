@@ -218,26 +218,9 @@ def activity_feed(ledger: Ledger, ground: Optional[TimeGround] = None,
 
 def growth_stats(ledger: Ledger, ground: Optional[TimeGround] = None) -> dict:
     """Every number here is a real ledger fact. The glyph is a deterministic
-    function of these — so the creature is an honest data-viz, never a fiction."""
-    g = _ground(ledger, ground)
-    entries = ledger.entries()
-    decisions = [e for e in entries if e.kind == "decision"]
-    verifs = [e for e in entries if e.kind == "verification"]
-    verified = sum(1 for e in verifs if e.body.get("status") == "verified")
-    checked = sum(1 for e in verifs if e.body.get("status") in ("verified", "refuted"))
-    mem = [e for e in entries if e.kind == "memory_write"]
-    loop_ends = [e for e in entries if e.kind == "loop_run_end"]
-    open_ts = hidden_no_count(ledger, g)
-    first = min((e.stamp.event_time for e in entries), default=g.now())
-    age_days = max(0.0, (g.now().astimezone(first.tzinfo) - first).total_seconds() / 86400)
-    return {
-        "decisions": len(decisions),
-        "verified": verified,
-        "checked": checked,
-        "trust": round(verified / checked, 3) if checked else None,
-        "memories": len(mem),
-        "loop_runs": len(loop_ends),
-        "open_ts": open_ts,
-        "age_days": round(age_days, 2),
-        "entries": len(entries),
-    }
+    function of these — so the creature is an honest data-viz, never a fiction.
+    Delegates to the CORE (trellis.reflect.self_image_stats) so the harness's
+    reflection ritual and the UI compute the self-image the same way — one
+    source of truth."""
+    from trellis.reflect import self_image_stats
+    return self_image_stats(ledger, _ground(ledger, ground))

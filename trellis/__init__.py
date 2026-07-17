@@ -21,6 +21,9 @@ from .decisions import (Decision, Verdict, POV, IncompleteTriangulationError,
                         DecisionLog, CollidingDecisionError, question_key)
 from .navigate import (Navigator, Walk, NavHit, ResolvedHeadCache,
                        ReopenRequiredError)
+from .reflect import (ReflectionRitual, SelfChange, self_image_stats,
+                      reflection_loop_spec, DreadError, UnverifiedSelfChangeError,
+                      ReflectionSynthesisError, REFLECTION_KIND)
 from .surfaces import Surface, ConversationKey, PrivacyBoundaryError
 from .passes import Pass, PassStatus, TurdDropError, PassExchange
 from .loops import LoopSpec, LoopRun, Outcome, LoopRegistry, LoopBudgetExceeded
@@ -41,6 +44,9 @@ __all__ = [
     "DecisionLog", "CollidingDecisionError", "question_key",
     "Navigator", "Walk", "NavHit", "ResolvedHeadCache", "ReopenRequiredError",
     "Workspace", "TitleError",
+    "ReflectionRitual", "SelfChange", "self_image_stats", "reflection_loop_spec",
+    "DreadError", "UnverifiedSelfChangeError", "ReflectionSynthesisError",
+    "REFLECTION_KIND",
     "Surface", "ConversationKey", "PrivacyBoundaryError",
     "Pass", "PassStatus", "TurdDropError", "PassExchange",
     "LoopSpec", "LoopRun", "Outcome", "LoopRegistry", "LoopBudgetExceeded",
