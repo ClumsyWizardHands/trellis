@@ -162,3 +162,27 @@ def test_cadence_due_then_not_due_then_due_again(ledger, clock):
     assert r.due() is False           # just ran
     clock.advance(hours=25)
     assert r.due() is True            # a day later
+
+
+def test_future_dated_reflection_does_not_wedge_the_cadence(ledger, clock):
+    """Phase-2.6 adversary HIGH: a caller-supplied event_time a year in the
+    future used to set last_run() a year out — wedging the schedule so it never
+    became due again. The cadence keys off harness-owned write_time, so a bogus
+    event_time can't disable the ritual."""
+    _seed(ledger)
+    r = ReflectionRitual(ledger, author="witness", cadence=timedelta(hours=24))
+    r.run("s1", "did the work", GOODLEARNED,
+          event_time=clock.t + timedelta(days=365))   # absurd future stamp
+    assert r.due() is False                            # just ran (by write_time)
+    clock.advance(hours=25)
+    assert r.due() is True                             # a real day later — NOT wedged
+
+
+def test_backdated_reflection_does_not_overfire(ledger, clock):
+    """The mirror: a back-dated reflection must not leave last_run in the past
+    and let the ritual fire many times in one real day."""
+    _seed(ledger)
+    r = ReflectionRitual(ledger, author="witness", cadence=timedelta(hours=24))
+    r.run("s1", "backfilled reflection", GOODLEARNED,
+          event_time=clock.t - timedelta(days=10))
+    assert r.due() is False                            # it really just ran

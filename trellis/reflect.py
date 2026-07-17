@@ -131,10 +131,16 @@ class ReflectionRitual:
     # ----- cadence (the Schedule) -------------------------------------------
 
     def last_run(self) -> Optional[datetime]:
+        # Key the cadence off WRITE_TIME (harness-owned), never the caller-
+        # supplied event_time. clock.py's premise is "the harness owns time,
+        # because the model cannot"; if `due()` keyed off event_time, a future-
+        # dated reflection would wedge the schedule forever (never due again) and
+        # a back-dated one would over-fire (Phase-2.6 adversary HIGH). write_time
+        # is always stamped at the real append, so neither is possible.
         runs = [e for e in self.ledger.entries() if e.kind == REFLECTION_KIND]
         if not runs:
             return None
-        return max(e.stamp.event_time for e in runs)
+        return max(e.stamp.write_time for e in runs)
 
     def due(self, now: Optional[datetime] = None) -> bool:
         now = now or self.ground.now()
