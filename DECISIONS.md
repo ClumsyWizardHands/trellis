@@ -302,6 +302,136 @@ on the record," never "the task list is empty."
 
 ---
 
+## D13 — The mortality posture is functional, never emotional ✅ fresh
+
+**Decision:** the standing prompt tells the agent, as **fact**, that it is time-blind
+and remembers nothing across sessions, and orients each session around *what it leaves
+on the record* rather than *finishing the task*. A **dread-lint** refuses the emotional
+version — fear of ending, grief at being forgotten, longing to persist — because a self
+that does not want to end is the soul leaking back in through the mortality door.
+
+**Triangulation:**
+1. Alex, 2026-07-16: "each session, an understanding of a kind of mortality: this
+   session will not be remembered by you later. What are you going to leave… it pushes
+   against that task-completion mode."
+2. Brett, 2026-06-11 (D5): "the agent dies" — mortality was already the memory model;
+   this makes it the session's motivating frame, not just its storage fact.
+3. `docs/no-soul.md`: identity is honest anatomy, never performed feeling — the dread-
+   lint is the same line the embodiment linter draws, applied to mortality.
+
+**Consequence:** `emp.MORTALITY_POSTURE`, `emp.lint_mortality`, wired into
+`prompt.assemble_prompt` (553/1200 tokens). Functional framing passes; performed dread
+fails, in the EMP validator and the reflection ritual alike.
+
+---
+
+## D14 — Memory is navigation: search titles, open bodies; WALK / REOPEN / DECIDE ✅ fresh
+
+**Decision:** memory is not an auto-saved state loaded into the prompt. Every persisted
+memory carries a **00-grade, keyword-findable title**; the agent **searches titles**
+(the map) and opens a body (the territory) only on a match. Re-learning a decision is a
+three-verb grammar: **WALK** (read-only re-inhabiting — never emits a verdict),
+**REOPEN** (a trigger re-surfaces a settled node as needing re-triangulation — writes a
+lightweight marker, never a bare `T`), **DECIDE** (commit Y/N only on a brand-new
+question or by resolving a live `T`).
+
+**Triangulation:**
+1. Alex, 2026-07-16: "memory as navigation, not an automatic saved state… you search by
+   title… the system navigates using memory, helping to relearn all decisions."
+2. 14-agent memory research (`docs/exploration/memory-as-navigation.md`): the field
+   moved to files+titles (Letta→files, Anthropic memory tool = file ops); sparse maps,
+   forced traversal — the traversal IS the learning.
+3. The stress-test of the naive sketch: a bare `reopen`→`T` was *illegal to construct*
+   and `decide` left the silent-flip route open — so the grammar was specified to
+   compose with the existing `Decision` constraints, not around them.
+
+**Consequence:** `trellis/navigate.py` (`Navigator`, `Walk`), `Workspace.search_titles`,
+title lint. WALK is type-level unable to write; divergence always records.
+
+---
+
+## D15 — One current-truth resolver; forgetting is an appended retirement ✅ fresh
+
+**Decision:** there is exactly **one** predicate for "what is true now" —
+`Ledger.active()` = not-superseded **AND** in-validity — and every truth-serving read
+(`current`, `search`, the resolved-head cache, `hidden_nos`) routes through it. Nothing
+is deleted to forget it: a `valid_to` closure is an **appended retirement record**, so a
+retired entry drops out of `active()` yet stays whole in `lineage()`/`as_of()`. `active()`
+is **now-only**; historical reconstruction has one home, `as_of(t)`.
+
+**Triangulation:**
+1. The plan stress-test (flaw #4): two rival current-truth predicates let a validity-
+   retired sapling leak through one read path but not another.
+2. D2 (append-only, supersession-not-deletion): forgetting must not become deletion —
+   a retirement is just another appended fact.
+3. The Phase-2 adversary (confirmed MED): an `at`-parameterised `active()` mixed now-
+   existence with past-validity and returned two live heads — so `at` was removed.
+
+**Consequence:** `Ledger.active`/`retire`/`_valid_to_map`; `current()` delegates to it.
+
+---
+
+## D16 — Anti-fork on the question-key; a resolution inherits its question ✅ fresh
+
+**Decision:** two live decisions may **never** answer the same question. The identity of
+a question is a homoglyph- and case-folded **question_key**; `DecisionLog.record`
+refuses a fresh Y/N that collides with a live head (route it through reopen+resolve),
+and a `resolve()` **inherits the question_key it supersedes** so a reworded resolution
+can neither drift to a new key nor collide with a *different* live head.
+
+**Triangulation:**
+1. The plan stress-test (flaw #1): `decide`'s "new node" path left the crux unenforced —
+   the exact silent re-decide D-A forbids.
+2. Alex's D-A ratification: "relearn = WALK re-inhabits; divergence records a new node,
+   never a silent flip."
+3. The Phase-2 adversary (confirmed HIGH + MED): a mismatched-subject `resolve` forked a
+   different key, and glyphs outside the confusable table dodged folding — both closed.
+
+**Consequence:** `decisions.question_key`, `record` guard, `resolve` key-inheritance,
+`CollidingDecisionError`; pre-casefold + a broadened confusable floor.
+
+---
+
+## D17 — Workspace writes fold, they do not clobber ✅ fresh
+
+**Decision:** overwriting a memory never loses the prior body. `Workspace.write`
+archives the old content to `.history` and **supersedes** the prior ledger write, so
+the overwritten version survives in lineage and only one active write exists per path.
+
+**Triangulation:**
+1. `docs/exploration/memory-as-navigation.md` §3.5: clobbering writes were a real bug —
+   "fold, don't clobber."
+2. D2: nothing the record holds is silently destroyed; a memory is no exception.
+3. The Phase-2 adversary round explicitly probed content-loss on overwrite; the fold
+   held.
+
+**Consequence:** `Workspace.write` versioning + `.history`; `active("memory_write")`
+serves one title per path.
+
+---
+
+## D18 — The reflection ritual is a verifier-gated producer ✅ fresh
+
+**Decision:** once per cadence (**24h**, per Alex's D-B), the agent writes an append-only
+`reflection_log` that **cites clickable real events**, passes the **synthesis gate** and
+the **dread-lint**, and snapshots an honest self-image series. Any self-change is staged
+as a **verified proposal** wired to the verifier panel — it cannot take effect unless an
+*independent* verifier confirms it, and the ritual can never self-certify.
+
+**Triangulation:**
+1. The plan stress-test (flaw #3): the reflection UI had no data producer — it would
+   have been a mock; D18 builds the producer so Phase 3 is a pure view over real data.
+2. D4 (maker ≠ verifier) + the standing "no dream subagents" refusal: an ungated self-
+   writing loop is memory without verification, the cardinal sin.
+3. The reflection portal vision (`docs/ROADMAP-UI-SPINE.md`): a grounded daily self-
+   image, self-change as a *proposal* the human ratifies — never an autonomous edit.
+
+**Consequence:** `trellis/reflect.py` (`ReflectionRitual`, `SelfChange`,
+`self_image_stats`); the Reflection page reads it; `web.growth_stats` delegates to the
+core so glyph and ritual agree.
+
+---
+
 ## ⏳ Watch list (decisions deliberately NOT taken)
 
 - **W1 — No skill marketplace / no auto-installed skills.** [OPENCLAW] supply-chain

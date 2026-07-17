@@ -439,7 +439,19 @@ never a vibe (full design + the honesty guardrails:
 [`ROADMAP-UI-SPINE.md`](ROADMAP-UI-SPINE.md)):
 
 <p align="center">
-  <img src="assets/ui-reflection-mockup.png" width="900" alt="the Reflection room — the reframed UI"/>
+  <img src="assets/ui/reflection.png" width="900" alt="the Reflection page — daily self-image, cited why, deltas, verified self-change"/>
+</p>
+
+<sub>Real screenshot (`web/app.py`, rendered from the demo ledger). Today's
+self-image beside yesterday's, the cited "why I look like this", the day's deltas,
+and a self-change staged as a <b>verified</b> proposal — it cannot take effect
+unless an independent verifier confirms it.</sub>
+
+And a decision **opens up** into a WALK — its verdict, the named points of view a
+`T` requires, and the lineage upstream toward the EMP:
+
+<p align="center">
+  <img src="assets/ui/walk.png" width="900" alt="a decision opens up — the WALK view: verdict, POVs, lineage"/>
 </p>
 
 The daily ritual, as a sequence — grounded, logged, cited, honest:
@@ -462,13 +474,11 @@ store, tailed live. No broker, no JS build. See [`web/README.md`](../web/README.
 <details>
 <summary><b>v1 — the operations console we corrected</b></summary>
 
-<br/>The first cut (a real screenshot of `web/app.py`): an approvals inbox, loop
-health, a trust percentage, insider vocabulary, all on one crammed page. It was
-the market's control-plane genre — a place to *operate* the agent instead of
-*understand* it. The correction and its reasoning:
+<br/>The first cut: an approvals inbox, loop health, a trust percentage, insider
+vocabulary, all on one crammed page. It was the market's control-plane genre — a
+place to *operate* the agent instead of *understand* it. The portal above is the
+built replacement. The correction and its reasoning:
 [the cognitive lineage](lineage/2026-07-15-ui-comprehension-reflection.md).
-
-<p align="center"><img src="assets/ui-dashboard.png" width="760" alt="v1 dashboard (superseded)"/></p>
 </details>
 
 ---

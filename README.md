@@ -12,8 +12,8 @@ tomorrow, and a trustworthy junior colleague who keeps receipts and gets more
 useful the longer they work with you. → **New here? Read [WHAT-THIS-IS.md](WHAT-THIS-IS.md) first.**
 
 <p align="center">
-  <img src="https://img.shields.io/badge/tests-124%20passing-3fb950?style=flat-square" alt="tests"/>
-  <img src="https://img.shields.io/badge/adversarial-4%20rounds%2C%20converged-58a6ff?style=flat-square" alt="adversarial"/>
+  <img src="https://img.shields.io/badge/tests-179%20passing-3fb950?style=flat-square" alt="tests"/>
+  <img src="https://img.shields.io/badge/adversarial-5%20rounds%2C%20converged-58a6ff?style=flat-square" alt="adversarial"/>
   <img src="https://img.shields.io/badge/core-zero%20runtime%20deps-d29922?style=flat-square" alt="deps"/>
   <img src="https://img.shields.io/badge/python-3.10%2B-e6edf3?style=flat-square" alt="python"/>
   <img src="https://img.shields.io/badge/license-MIT-8b949e?style=flat-square" alt="license"/>
@@ -87,18 +87,32 @@ flowchart LR
 The UI is **not** an operations console. The work lives in Discord and email;
 this surface exists to make the invisible (the verifier agents, the loops, the
 coordination you never see in Discord) legible in plain terms — and to be the
-room where the agent reflects on itself each day. Its heart is the **Reflection**
-page: the agent's daily self-image beside yesterday's, every trait tied to real
-**cited** events, and any change it wants to make to itself going through a
-checker — a proposal, not a vibe.
+room where the agent reflects on itself each day. It's a **side nav of dedicated,
+self-explaining pages** — every term defines itself in place, no insider
+vocabulary. Its heart is the **Reflection** page: the agent's daily self-image
+beside yesterday's, every trait tied to real **cited** events, the day's deltas,
+and any change it wants to make to itself going through an independent checker — a
+proposal, not a vibe.
 
 <p align="center">
-  <img src="docs/assets/ui-reflection-mockup.png" width="880" alt="the reframed trellis UI — the Reflection room"/>
+  <img src="docs/assets/ui/reflection.png" width="880" alt="the trellis Reflection page — daily self-image, cited why, deltas, verified self-change"/>
 </p>
 
-<sub>A mockup of the reframed design (a side nav of self-explaining pages; the
-Reflection room at the centre). The vision → [`docs/ROADMAP-UI-SPINE.md`](docs/ROADMAP-UI-SPINE.md).
-Why it changed → [the cognitive lineage of the correction](docs/lineage/2026-07-15-ui-comprehension-reflection.md).</sub>
+<sub>The <b>Reflection</b> page: today's self-image (a deterministic drawing of
+real ledger numbers) beside yesterday's, the cited "why I look like this", the
+day's deltas, and a self-change staged as a <b>verified</b> proposal. Vision →
+[`docs/ROADMAP-UI-SPINE.md`](docs/ROADMAP-UI-SPINE.md) · why it changed →
+[the cognitive lineage](docs/lineage/2026-07-15-ui-comprehension-reflection.md).</sub>
+
+<p align="center">
+  <img src="docs/assets/ui/overview.png" width="880" alt="the trellis Overview — self-image, attention rail, staged actions, loops, activity"/>
+</p>
+
+<sub>The <b>Overview</b>: the self-image and headline numbers, the <b>attention
+rail</b> (unresolved triangulations past their revisit date + anything re-opened),
+what's waiting on your yes, loop health, and the latest story. A decision on the
+<b>Decisions</b> page <b>opens up</b> into a WALK — its verdict, the named points
+of view, and the lineage upstream toward the EMP.</sub>
 
 <details>
 <summary><b>v1 — the operations console we corrected (and why it was wrong)</b></summary>
@@ -109,11 +123,8 @@ control-plane genre — and wrong in an instructive way. It built a place to
 *operate* the agent when the whole point is to *understand* it (the exact failure
 the founding brief warned against: "people don't know what it means"). Kept here
 as the anti-example that produced the reframe above — anti-examples are the fuel.
-
-<p align="center"><img src="docs/assets/ui-dashboard.png" width="720" alt="v1 dashboard (superseded)"/></p>
-
-The working code (`web/app.py`, FastAPI + HTMX + SSE over the JSONL ledger) still
-runs; the *design* is being rebuilt to the portal above.
+The portal above (`web/app.py`, FastAPI + HTMX + SSE over the JSONL ledger) is the
+built replacement.
 </details>
 
 > 📊 **Full picture book:** [`docs/VISUAL-TOUR.md`](docs/VISUAL-TOUR.md) — the

@@ -5,7 +5,7 @@ is not an audit.** Three layers, in order of increasing independence.
 
 ## Layer 1 — deterministic suite (the floor)
 
-`python3 -m pytest` — **66 tests**, structured as the acceptance checklist from
+`python3 -m pytest` — **179 tests**, structured as the acceptance checklist from
 the baby EMP (see ACCEPTANCE.md: the ten unforgivables mapped to named tests).
 Zero network, zero API keys, deterministic clock — a time bug cannot hide
 behind a real clock.
@@ -36,6 +36,7 @@ breaker script, each claimed break independently re-derived by a second agent.
 | 2 | 19 (re-attack the fixes) | **11** | my fixes were too shallow — mostly ONE root cause (invisible-char handling covered only Unicode categories Z/C) |
 | 3 | 11 (re-attack the root fixes) | **9** | deeper + more exotic: Cyrillic Palochka 'l', a zero-width char *inside* a keyword, an object whose `__repr__` itself raises |
 | 4 | 6 (structural only) | **5** (1 real, rest my over-corrections) | #42 ordering bug (real); identity over-folding (my fix merged real names — corrected to an ASCII allowlist); dotted-soul-filename; + advisory tuning |
+| 5 | 13 (the memory-as-navigation build) | **4 confirmed** (2 high, 2 med) | attacked Phase 2's new code: a `resolve()` cross-key fork, a validity-retired head served by a length-keyed cache, a homoglyph outside the confusable table, and an `active(at=<past>)` that returned two live heads. All fixed at the root and regression-pinned; a 5th (raw `ledger.append` bypasses the domain guard) was ruled by-design and documented. |
 
 **Convergence, called at round 4.** The structural refusals are now airtight and
 regression-pinned: silent failure is impossible even when an exception's own
@@ -48,8 +49,18 @@ linter, pass-substance, synthesis-justification — which *cannot* converge agai
 unlimited exotic Unicode or semantic padding. Continuing to run rounds on those
 would be the perfectionism failure the harness is built against. They are
 improved once, labeled advisory, and backed by the real gates: an identity
-allowlist and human review. **124 tests, 10/10 stress.** Adversarial testing
+allowlist and human review. **179 tests, 10/10 stress.** Adversarial testing
 never "ends" — it reaches diminishing returns, and this is that point.
+
+**Round 5 (2026-07-17) applied the same discipline to a whole new subsystem** —
+the memory-as-navigation build (titles, WALK/REOPEN/DECIDE, validity/retirement,
+fold-not-clobber, the reflection ritual). 13 agents attacked it; 4 real flaws
+were confirmed and fixed at the root (the anti-fork now holds on a homoglyph-
+folded question-key even through `resolve()`; the resolved-head cache is keyed on
+validity-that-can-elapse, not just ledger length; `active()` is now-only so no
+past query returns two heads). The plan for this build was *itself* adversarially
+stress-tested (8 agents, 4 flaws) and hardened **before** any code was written —
+the harness's doctrine applied to its own blueprint.
 
 
 The count falling 19 → 11 → 9 is the point: not a harness that was never broken,
