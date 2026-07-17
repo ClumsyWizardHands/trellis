@@ -93,3 +93,35 @@ def test_stale_evidence_from_before_the_question_does_not_count(ledger, ground, 
     ak = assumption_key("the funder is aligned on pricing")
     with pytest.raises(NotResolvedError):
         ql.resolve(ak, "pointing at an old note", evidence_refs=[old.id], author="witness")
+
+
+def test_cannot_close_on_a_dry_seek_or_the_question_itself(ledger, ground, clock):
+    """Round-7 HIGH: a dry seek, a re-ask, or the question's own entry all
+    postdate the question but are the loop's own machinery — not a map-move.
+    Closing on them is the 'I searched → I understand' laundering, blocked."""
+    ql = QuestionLog(ledger, ground)
+    qentry = ql.ask(_q(ground=ground), "witness")
+    ak = assumption_key("the funder is aligned on pricing")
+    clock.advance(hours=1)
+    dry = ql.record_seek(ak, "searched, found nothing", map_changed=False,
+                         delta_refs=[], author="witness")
+    # a dry seek postdates the question but is not a move
+    with pytest.raises(NotResolvedError):
+        ql.resolve(ak, "I searched", evidence_refs=[dry.id], author="witness")
+    # the question's own entry is not evidence of its own resolution
+    with pytest.raises(NotResolvedError):
+        ql.resolve(ak, "circular", evidence_refs=[qentry.id], author="witness")
+
+
+def test_cannot_close_on_a_retired_entry(ledger, ground, clock):
+    ql = QuestionLog(ledger, ground)
+    ql.ask(_q(ground=ground), "witness")
+    ak = assumption_key("the funder is aligned on pricing")
+    clock.advance(hours=1)
+    moved = ledger.append("decision", "observer:witness",
+                          {"decision_id": "z", "subject": "s", "verdict": "Y",
+                           "question_key": "obs:z"})
+    ledger.retire(moved.id, "witness", reason="turned out wrong")   # no longer live
+    with pytest.raises(NotResolvedError):
+        ql.resolve(ak, "pointing at a retired move", evidence_refs=[moved.id],
+                   author="witness")

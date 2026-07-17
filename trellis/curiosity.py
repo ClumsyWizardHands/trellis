@@ -158,17 +158,28 @@ class QuestionLog:
         if q is None:
             raise KeyError(f"no open question for {akey}")
         asked_at = q.stamp.write_time
+        # evidence must be a REAL, ACTIVE map-move — not the loop's own machinery.
+        # The adversary's HIGH: a DRY seek (or a re-ask, or the question itself)
+        # postdates the question, so a naive "postdates → counts" check let "I
+        # searched" launder into "I understand." Exclude the machinery kinds and
+        # require the entry to be live (a retired/superseded entry isn't a move).
+        machinery = {QUESTION_KIND, SEEK_KIND, "observation_check", "ingest_marker",
+                     "affirmation", "retirement"}
+        active_ids = {x.id for x in self.ledger.active()}
+        chain = {e.id for e in self.ledger.lineage(q.id)}   # the question's own chain
         real = []
         for ref in evidence_refs or []:
             e = self.ledger.get(ref)
-            if e is not None and e.stamp.write_time >= asked_at:
+            if (e is not None and e.id not in chain and e.kind not in machinery
+                    and e.id in active_ids and e.stamp.write_time >= asked_at):
                 real.append(ref)
         if not real:
             raise NotResolvedError(
                 "a question can't be closed as understood without evidence that "
-                "the map MOVED since it was asked. 'I searched' is not 'I "
-                "understand' — bring a new observation, a shifted confidence, or "
-                "a sharpened question, or leave it open.")
+                "the map genuinely MOVED since it was asked — a new observation, a "
+                "shifted confidence, a sharpened decision. A dry seek, a re-ask, or "
+                "the question itself is not a move: 'I searched' is not 'I "
+                "understand.' Bring a real, live map-change, or leave it open.")
         return self.ledger.append(
             kind=QUESTION_KIND, author=author,
             body={**q.body, "status": "resolved", "resolved_how": how,
