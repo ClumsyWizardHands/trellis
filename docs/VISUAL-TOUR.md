@@ -330,7 +330,19 @@ gitGraph
     checkout adversary
     commit id: "R4: 5 (1 real + over-corrections)"
     checkout main
-    merge adversary id: "convergence — 124 tests"
+    merge adversary id: "structural refusals converge"
+    checkout adversary
+    commit id: "R5: memory core — 4"
+    checkout main
+    merge adversary id: "titles/WALK/validity hardened"
+    checkout adversary
+    commit id: "R6: reflection gate — 2"
+    checkout main
+    merge adversary id: "self-modification gate closed"
+    checkout adversary
+    commit id: "R7: contemplative backdrop — 5"
+    checkout main
+    merge adversary id: "converged — 222 tests"
 ```
 
 The point isn't a harness that was never broken. It's one broken **cheaply, in
@@ -413,7 +425,64 @@ unresolved.
 
 ---
 
-## 13. How it looks and functions — a comprehension-and-reflection portal
+## 13. The contemplative backdrop — a mind that maps what it understands
+
+The unseen work: trellis continuously takes in the team's record and *understands*
+it — not "find all the decisions" but *how the room got there*. The flow, end to
+end:
+
+```mermaid
+flowchart LR
+    subgraph src["sources (read the dumps, fetch the gaps)"]
+        DUMP["Atlas dumps<br/>transcripts · discord-logs"]
+        MEDIA["video / audio notes<br/>→ whisper transcription"]
+    end
+    ING["ingest<br/>identity-key · content-hash<br/>two-phase markers (idempotent)"]
+    subgraph two["understand as TWO linked nodes"]
+        OBS["observation<br/>what the ROOM decided<br/>attributed · confidence · fallible"]
+        OP["opinion<br/>the agent's OWN Y/N/T"]
+    end
+    VAULT[("Obsidian vault<br/>= the ledger's reconciled face")]
+    QS["curiosity loop<br/>open questions · staleness rail<br/>a dry seek ≠ understanding"]
+    UI["The Map · How-I-got-here<br/>Assumptions & Curiosities"]
+    DUMP --> ING
+    MEDIA --> ING
+    ING --> OBS
+    OBS -- opinion_of --> OP
+    OBS --> VAULT
+    OP --> VAULT
+    VAULT --> QS
+    QS -. "seek (read-only, autonomous)" .-> ING
+    VAULT --> UI
+    QS --> UI
+    classDef store fill:#161b22,stroke:#58a6ff,color:#e6edf3
+    classDef act fill:#0d2818,stroke:#3fb950,color:#e6edf3
+    class VAULT store
+    class OBS,OP,QS act
+```
+
+One click on any observed decision unfolds **how the agent got there** — what the
+room decided (attributed, confidence stated, machine-heard flagged), the agent's
+*separate* opinion, the source moments it rests on, and the honest caveats:
+
+<p align="center">
+  <img src="assets/ui/observation.png" width="860" alt="one-click 'How I got here' — observation, opinion, cited moments, confidence, caveats"/>
+</p>
+
+The contemplating mind is **watchable**: an open question that sits past its
+revisit date lights up, and a *dry streak* flags "keeps looking, nothing moves" —
+because closing a question as understood requires evidence the map actually moved.
+"I searched" is structurally never "I understand."
+
+<p align="center">
+  <img src="assets/ui/curiosities.png" width="860" alt="Assumptions & Curiosities — overdue questions light up, dry streaks flag stalling"/>
+</p>
+
+Full design + the stress-test that hardened it → [`PLAN-contemplative-ingestion.md`](PLAN-contemplative-ingestion.md).
+
+---
+
+## 14. How it looks and functions — a comprehension-and-reflection portal
 
 The UI is **not** an operations console (v1 was — see the anti-example at the
 bottom of this section). It's a place to *understand* the agent, and the room
@@ -429,8 +498,11 @@ flowchart LR
     NAV --> LP["Loops<br/>what runs, dive into any run"]
     NAV --> VE["Verification<br/>the verifiers IN THE ACT"]
     NAV --> RE["Reflection<br/>how it sees itself today"]
+    NAV --> MAP["The Map<br/>what the room decided + its opinion"]
+    NAV --> ASK["Assumptions<br/>where it's unsure, what it's chasing"]
+    NAV --> IN["Ingestion<br/>what's taken in — coverage & gaps"]
     classDef p fill:#0d2818,stroke:#3fb950,color:#e6edf3
-    class HOME,ACT,AG,DEC,LP,VE,RE p
+    class HOME,ACT,AG,DEC,LP,VE,RE,MAP,ASK,IN p
 ```
 
 Its heart is the **Reflection** page — the daily self-image ritual. Every trait

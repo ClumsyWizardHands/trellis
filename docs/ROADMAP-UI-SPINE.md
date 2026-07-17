@@ -1,10 +1,13 @@
 # Roadmap — the UI spine: a comprehension-and-reflection portal
 
-> Status: **vision doc, being rebuilt on a reframe.** v1 of the UI shipped as an
-> operations dashboard and was wrong in an instructive way — see the cognitive
-> lineage of the correction:
+> Status: **BUILT.** v1 of the UI shipped as an operations dashboard and was wrong
+> in an instructive way — see the cognitive lineage of the correction:
 > [`lineage/2026-07-15-ui-comprehension-reflection.md`](lineage/2026-07-15-ui-comprehension-reflection.md).
-> This document is the corrected vision. The code rebuild follows it.
+> This document is the vision that was built: the portal now ships as a side nav of
+> self-explaining pages (Overview / The Map / Assumptions & Curiosities / Ingestion /
+> Decisions-that-open / Reflection / Loops / Verification / Agents / Activity), with
+> the daily reflection ritual and the one-click "how I got here" lineage live. Real
+> screenshots in [`VISUAL-TOUR.md`](VISUAL-TOUR.md) §13–14.
 
 ---
 

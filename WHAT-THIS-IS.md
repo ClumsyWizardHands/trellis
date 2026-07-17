@@ -75,6 +75,36 @@ xychart-beta
 demo, rots as it forgets. Lower line at the start, then climbing: **trellis** —
 modest on day one, more trustworthy every week as the notebook fills.</sub>
 
+## What it does while you're not looking
+
+The promises above are about how it behaves when you ask it something. But most of
+the value is in the *unseen* work. trellis quietly reads the team's whole record —
+meeting transcripts, the daily Discord history, even the voice notes and videos
+(it transcribes those) — and tries to genuinely **understand** it. Not "make a
+list of decisions," but *how the room got to each one*.
+
+Three things make that trustworthy instead of just another summarizer:
+
+- **It separates "what the room decided" from "what I think about it."** For every
+  decision it finds, it writes down two linked notes: the room's decision
+  (attributed to the actual people, with how sure it is, and an honest "the
+  transcript might be wrong — I only have the words") and its *own* opinion. It
+  never dresses up its guess as what actually happened.
+- **You can always see how it got there.** One click on any decision unfolds the
+  whole trail: the exact moments it rests on, its confidence, its caveats. And one
+  click of "yes, that's right" from you makes it more confident over time — without
+  ever making it wait on your permission to think.
+- **It stays honestly curious, and it can't fake it.** Each day it asks itself
+  "where am I assuming things?" and "what do I need to learn more about?", and those
+  open questions sit on a list that *nags* — an unanswered one lights up when it's
+  overdue. It's allowed to go read and dig on its own to chase them, but it can't
+  close a question by saying "I looked." It has to show that its understanding
+  actually changed. Searching is not the same as understanding, and the code knows
+  the difference.
+
+All of it lands in an Obsidian vault on your machine — your notebook, human-
+readable and editable — kept honest with the underlying record.
+
 ## The plain terms people search for
 
 If someone asked "what category is this," these are the honest, commonplace labels:

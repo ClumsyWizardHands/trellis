@@ -1,14 +1,15 @@
-# trellis web — the legible UI
+# trellis web — the comprehension & reflection portal
 
-A two-tier interface over the append-only ledger the harness already writes:
-a **comprehend tier** (the story, in plain language) on top of the **verify
-tier** (the raw ledger, for drill-down). The market solved *transparency for
-engineers* — traces and spans. This is *comprehension for a person*.
+**Not an operations console.** A side nav of dedicated, self-explaining pages over
+the append-only ledger the harness already writes — a place to *understand* what
+the agent understood, and the room where it reflects on itself each day. Every term
+defines itself in place; no insider vocabulary. The market solved *transparency for
+engineers* (traces and spans); this is *comprehension for a person*.
 
 See [`../docs/ROADMAP-UI-SPINE.md`](../docs/ROADMAP-UI-SPINE.md) for the design
 thinking and [`../docs/VISUAL-TOUR.md`](../docs/VISUAL-TOUR.md) for the diagrams.
 
-<p align="center"><img src="../docs/assets/ui-dashboard.png" width="820" alt="the dashboard"/></p>
+<p align="center"><img src="../docs/assets/ui/overview.png" width="860" alt="the trellis portal — Overview"/></p>
 
 ## Run it
 
@@ -27,17 +28,22 @@ To regenerate the demo ledger + the glyph/screenshot assets:
 python3 web/demo_seed.py           # writes web/demo/ledger.jsonl
 ```
 
-## What's on the page
+## The pages (a side nav of single-job surfaces)
 
-| Panel | What it shows | Backed by |
-|-------|---------------|-----------|
-| **Self-image glyph** | the agent as an honest data-viz creature, + *why* it looks that way | `web/glyph.py` from `growth_stats` |
-| **Inbox** | staged actions awaiting your approve/deny — nothing sends without your yes | `stage.py` |
-| **Decisions** | Y/N/T with EMP lineage; unresolved Ts past revisit glow red (hidden nos) | `decisions.py` |
-| **Loops** | each loop's last outcome and run count | `loops.py` |
-| **Trust** | verification pass-rate per maker — *verified by others, never itself* | `verify.py` |
-| **Agents** | who's alive, how much you trust each, last seen | ledger authors |
-| **Activity** | the story: what happened, newest first, in plain language | all ledger kinds |
+| Page | What it shows | Backed by |
+|------|---------------|-----------|
+| **Overview** | the one-screen read: self-image, the attention rail (hidden-nos + reopened), what's waiting on your yes, loop health, latest story | `views.growth_stats`, `open_questions_view`, `inbox` |
+| **The Map** | what the room decided (attributed, confidence, machine-heard flagged) with the agent's own opinion beside it | `observations_map` |
+| **How I got here** (`/observation/<id>`) | one-click lineage: the observation, the agent's opinion, the cited source moments, confidence + caveats, and a one-click affirm | `observation_lineage` |
+| **Assumptions & Curiosities** | open questions with the staleness rail — overdue lights up, a dry streak flags "keeps looking, nothing moves" | `curiosities` |
+| **Ingestion** | what's been taken in and understood; coverage + how much rests on machine transcription | `ingestion_status` |
+| **Decisions** | every Y/N/T with EMP lineage; a decision *opens up* into a WALK of its reasoning | `decision_timeline`, `decision_walk` |
+| **Reflection** | the daily self-image beside yesterday's, the cited "why", the deltas, a self-change as a verified proposal | `reflection_view`, `glyph.py` |
+| **Loops / Verification / Agents / Activity** | background jobs & health · who checked whom · who's on the record · the raw event log | `loop_health`, `trust_panel`, `roster`, `activity_feed` |
+
+The only write paths are a human's **approve/deny** of a staged action and a
+one-click **affirm** of an observation — both append an attributed event to the
+ledger. Firing an approved action stays the harness's job, not the UI's.
 
 ## How it's built
 

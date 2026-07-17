@@ -10,6 +10,14 @@ The five refusals (structural, not aspirational):
   3. No soul.md          — identity is an honest EMP (emp.py)
   4. No naked now()      — all state is bitemporal (ledger.py, clock.py)
   5. No auto-fire        — outbound actions are staged for a human (stage.py)
+
+On that spine sits a contemplating mind: memory as navigation (search titles,
+walk decisions — navigate.py), the mortality/reflection posture (reflect.py),
+and the contemplative backdrop that reads the team's record in and understands
+it — idempotent ingestion (sources.py), each decision recorded as an observation
++ the agent's own opinion (observe.py), projected into a reconciled Obsidian
+vault (vault.py), with a curiosity loop whose questions nag and where "I
+searched" is never "I understand" (curiosity.py).
 """
 
 __version__ = "0.1.0"
