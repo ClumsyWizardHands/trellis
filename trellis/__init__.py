@@ -30,6 +30,8 @@ from .observe import (Candidate, DecisionObserver, conversation_velocity, Veloci
                       stable_decision_id, synthesize_read)
 from .vault import (VaultReconciler, ReconcileReport, Drift, note_state,
                     render_frontmatter, hash_content)
+from .curiosity import (Question, QuestionLog, assumption_key, NotResolvedError,
+                        QUESTION_KIND, SEEK_KIND)
 from .surfaces import Surface, ConversationKey, PrivacyBoundaryError
 from .passes import Pass, PassStatus, TurdDropError, PassExchange
 from .loops import LoopSpec, LoopRun, Outcome, LoopRegistry, LoopBudgetExceeded
