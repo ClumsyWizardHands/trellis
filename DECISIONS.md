@@ -432,6 +432,91 @@ core so glyph and ritual agree.
 
 ---
 
+## D19 — Ingestion is idempotent by identity + content-hash + two-phase markers ✅ fresh
+
+**Decision:** the contemplating mind reads the team's record in (Atlas's Discord dumps +
+transcripts, Whisper output, media) through an adapter layer that hands each item to a
+harvester **exactly once**. Identity = `(source, channel, id, event_time)`, folding content
+in only when there is no id; a separate content-hash distinguishes a **correction** from a
+**duplicate**; `started`/`complete` markers make a crash mid-harvest **resumable**.
+
+**Triangulation:**
+1. Alex, 2026-07-17: "read the dumps, fetch the gaps… keep our own markers as our truth."
+2. The plan stress-test (5 determinism findings): `message_id=""` collapsed id-less
+   messages; append-only markers couldn't record partial progress; a corrected re-dump
+   looked like a duplicate — all closed here.
+3. D2 (append-only): coverage is *our* ledger, not Atlas's `state/` — what WE understood,
+   not what Atlas indexed.
+
+**Consequence:** `trellis/sources.py` (`Ingestor`, `RawItem`, `Provenance`). Single-writer
+(a personal agent) makes last-complete-wins dedup sufficient.
+
+---
+
+## D20 — An observed decision is TWO linked nodes: the room's, and the agent's ✅ fresh
+
+**Decision:** each decision found in a transcript is recorded as an **observation**
+(attributed to the room, confidence-tagged, `transcript_fallible`) **and** an **opinion**
+(the agent's own Y/N/T), joined by an `opinion_of` edge. They carry **distinct, stable
+identities** (`obs:<id>` / `op:<id>` keyed off source+moment+participants, via
+`Decision.effective_key()`), so the anti-fork guard never refuses the pair and re-reading
+the same meeting **folds** instead of forking.
+
+**Triangulation:**
+1. Alex, 2026-07-17 (D-choice): "both, as two linked nodes."
+2. D12 (contextual understanding *and* principled opinion): the agent must be able to hold
+   *what the room decided* separate from *what it thinks about it* — never confuse them.
+3. The plan + code stress-tests: keying off the free-text subject forked on any rewording;
+   the pair would collide on one `question_key` — both fixed by the stable namespaced key.
+
+**Consequence:** `trellis/observe.py`; `Decision` gains `key / attributed_to / confidence /
+provenance / opinion_of`. Confidence-aware confirmation (finder ≠ confirmer); provenance
+propagates by FLOOR + OR so a confident read can't be built from shaky inputs.
+
+---
+
+## D21 — The vault is the ledger's reconciled face, not a second brain ✅ fresh
+
+**Decision:** the Obsidian vault **is** the memory-as-navigation `Workspace` (markdown =
+content, git-versioned), and the ledger is the append-only event index over it, storing a
+**content hash** per write. Their divergence is **detectable and healed**: a human's Obsidian
+edit is folded in as an *attributed* write; status/frontmatter is computed **live** from the
+ledger (never a frozen id); what can't be healed is **surfaced**, not papered over.
+
+**Triangulation:**
+1. Alex, 2026-07-17: "make it an Obsidian vault… it all loops back into the UI."
+2. The plan stress-test: v1's "reconstructable from the ledger alone" was false — the ledger
+   stored a byte-count; retirement never touched the files. Both corrected.
+3. D5 (memory beside the agent, in files) + D2 (append-only): the vault is beside the agent
+   and human-editable; the ledger keeps the lineage honest.
+
+**Consequence:** `trellis/vault.py` (`VaultReconciler`, `note_state`, `render_frontmatter`);
+`memory.py` records a content hash.
+
+---
+
+## D22 — Curiosity has teeth: a dry seek is not understanding ✅ fresh
+
+**Decision:** open questions are **first-class nodes** targeting a named assumption, with an
+owner and a **revisit** — so an untouched question surfaces on the same "unresolved-T-is-a-
+hidden-no" staleness rail. A seek that moves nothing is a **dry** seek that does **not**
+advance the question; a `dry_streak` escalates to a human. A question can be **closed as
+understood only with evidence that POSTDATES it** — "I searched" is structurally not "I
+understand."
+
+**Triangulation:**
+1. Alex, 2026-07-17: autonomy is "persistent understanding, not making one search and using
+   it as an excuse to say I did my job."
+2. The plan stress-test (its strongest finding): "two questions a day" *was* the checkmark it
+   claimed to abolish — no staleness rail, no anti-fork, no map-moved gate.
+3. D12 + the mortality posture: the job is understanding, not task-closure; the loop must
+   end on named assumptions and unknowns, not a green check.
+
+**Consequence:** `trellis/curiosity.py` (`QuestionLog`, `Question`, `assumption_key`,
+`NotResolvedError`); surfaced on the Assumptions & Curiosities page.
+
+---
+
 ## ⏳ Watch list (decisions deliberately NOT taken)
 
 - **W1 — No skill marketplace / no auto-installed skills.** [OPENCLAW] supply-chain

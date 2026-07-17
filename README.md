@@ -12,8 +12,8 @@ tomorrow, and a trustworthy junior colleague who keeps receipts and gets more
 useful the longer they work with you. → **New here? Read [WHAT-THIS-IS.md](WHAT-THIS-IS.md) first.**
 
 <p align="center">
-  <img src="https://img.shields.io/badge/tests-183%20passing-3fb950?style=flat-square" alt="tests"/>
-  <img src="https://img.shields.io/badge/adversarial-5%20rounds%2C%20converged-58a6ff?style=flat-square" alt="adversarial"/>
+  <img src="https://img.shields.io/badge/tests-215%20passing-3fb950?style=flat-square" alt="tests"/>
+  <img src="https://img.shields.io/badge/adversarial-7%20rounds%2C%20converged-58a6ff?style=flat-square" alt="adversarial"/>
   <img src="https://img.shields.io/badge/core-zero%20runtime%20deps-d29922?style=flat-square" alt="deps"/>
   <img src="https://img.shields.io/badge/python-3.10%2B-e6edf3?style=flat-square" alt="python"/>
   <img src="https://img.shields.io/badge/license-MIT-8b949e?style=flat-square" alt="license"/>
@@ -114,6 +114,29 @@ what's waiting on your yes, loop health, and the latest story. A decision on the
 <b>Decisions</b> page <b>opens up</b> into a WALK — its verdict, the named points
 of view, and the lineage upstream toward the EMP.</sub>
 
+### The contemplative backdrop — a mind that maps what it understands
+
+Beyond answering in the moment, trellis does the *unseen work*: it takes in the
+team's record (transcripts, the daily Discord downloads, Brett's videos, audio
+notes), and **understands** it — tracking not just *what* was decided but *how the
+room got there*. Each decision it finds becomes **two linked nodes**: what the room
+decided (attributed to them, confidence stated, "the transcript may be wrong")
+and the agent's **own opinion** about it. One click shows you exactly **how it got
+there** — the cited moments, the confidence, the honest caveats — and a one-click
+"yes, that's right" that *compounds* trust without ever gating the agent.
+
+<p align="center">
+  <img src="docs/assets/ui/observation.png" width="880" alt="one-click 'how I got here' — the observation, the agent's opinion, cited moments, confidence, caveats"/>
+</p>
+
+<sub>The one-click <b>"How I got here"</b>: what the room decided (attributed, with
+confidence and a <i>machine-heard</i> flag), the affirm button that compounds but
+never gates, the honest caveats (<i>"I only had the words"</i>), the agent's
+separate opinion, and the source moments it rests on. Its worry made watchable: an
+<b>Assumptions &amp; Curiosities</b> board where overdue questions light up and a
+<b>dry streak</b> flags "keeps looking, nothing moves" — because "I searched" is
+structurally never "I understand." Design → [`docs/PLAN-contemplative-ingestion.md`](docs/PLAN-contemplative-ingestion.md).</sub>
+
 <details>
 <summary><b>v1 — the operations console we corrected (and why it was wrong)</b></summary>
 
@@ -150,7 +173,7 @@ into type errors.
 
 ```
 pip install -e .            # zero runtime dependencies in the core
-python3 -m pytest           # 183 tests — the acceptance suite
+python3 -m pytest           # 215 tests — the acceptance suite
 python3 stress/stress_test.py   # 10 adversarial scenarios, evidence-logged
 python3 examples/run_witness.py # a full witness cycle, offline, no API key
 ```
@@ -295,5 +318,5 @@ RuleVerifier("witness:a").verify(claim_by_witness_a)
 ---
 
 *Built 2026-07-15 in a Cowork session, from the corpus in `~/atlas`, the builds
-on `~/Desktop`, and the July 2026 harness field. 183 tests, 10 adversarial
+on `~/Desktop`, and the July 2026 harness field. 215 tests, 10 adversarial
 scenarios, zero runtime dependencies.*

@@ -118,3 +118,42 @@ def test_coverage_reports_honestly(ledger, clock):
     cov = ing.coverage()
     assert cov["items_ingested"] == 2 and cov["machine_transcribed"] == 1
     assert cov["by_source"] == {"discord": 1, "transcript": 1}
+
+
+# ----- Phase-A adversary fixes (round 7) ----------------------------------
+
+def test_id_bearing_correction_with_fixed_timestamp_is_still_a_correction(ledger, clock):
+    """The adversary MED: event_time in the identity hash made a time-corrected
+    re-dump of the SAME id look brand-new. It must remain a correction."""
+    ing = Ingestor(ledger)
+    h = _harvester_factory(ledger)
+    a = RawItem("discord", "chiefs", "draft", clock.t, item_id="msg-5")
+    ing.ingest([a], h)
+    clock.advance(minutes=5)   # the re-dump also 'fixed' the timestamp
+    b = RawItem("discord", "chiefs", "corrected", clock.t, item_id="msg-5")
+    assert a.identity_key() == b.identity_key()      # same item despite new time
+    r = ing.ingest([b], h)
+    assert r.corrected == 1
+    assert len([e for e in ledger.active("derived")]) == 1   # no duplicate
+
+
+def test_resume_retires_orphaned_partial_derived(ledger, clock):
+    """The adversary HIGH: a crash mid-harvest leaves derived entries the
+    'started' marker never recorded — they must still be retired on resume,
+    found via their provenance/source ref."""
+    ing = Ingestor(ledger)
+    item = RawItem("discord", "chiefs", "a decision", clock.t, item_id="msg-9")
+    key = item.identity_key()
+    # simulate a crash: a partial derived entry that references the source, and a
+    # 'started' marker with NO derived_ids (exactly the production shape)
+    orphan = ledger.append("derived", "witness",
+                           {"from": key, "content": "PARTIAL orphan"})
+    ledger.append("ingest_marker", "ingest",
+                  {"identity_key": key, "phase": "started",
+                   "content_hash": item.content_hash(), "source": "discord",
+                   "channel": "chiefs"})   # no derived_ids
+    ing.ingest([item], _harvester_factory(ledger))
+    # the orphaned partial is retired; only the fresh one is active
+    active = [e for e in ledger.active("derived")]
+    assert len(active) == 1 and active[0].body["content"] == "a decision"
+    assert ledger.get(orphan.id) is not None            # retired, not deleted

@@ -121,3 +121,47 @@ def test_velocity_is_a_proxy_not_a_feeling(clock):
     v = conversation_velocity(ts, ["brett"] * 30 + ["alex"] * 30, burst_threshold=30)
     assert v.messages == 60 and v.participants == 2 and v.burst is True
     assert "proxy" in v.caveat().lower()
+
+
+# ----- Phase-B adversary fixes (round 7) ----------------------------------
+
+def test_opinion_T_without_povs_leaves_no_half_written_pair(ledger, clock):
+    """The adversary HIGH: an opinion T with no POVs must raise at construction,
+    BEFORE the observation is appended — no half-written pair on the ledger."""
+    import pytest
+    from trellis.decisions import IncompleteTriangulationError
+    bad = Candidate(anchor="l1", subject="A call", verdict=Verdict.Y,
+                    rationale="the room agreed", participants=["brett"],
+                    emp_lineage="EMP:ends[0]", opinion_verdict=Verdict.T,
+                    opinion_rationale="needs triangulation")   # T but no opinion_povs
+    obs = DecisionObserver(ledger, detect=lambda it: [bad],
+                           confirm=lambda c, it: (True, 0.5, ""))
+    with pytest.raises(IncompleteTriangulationError):
+        Ingestor(ledger).ingest([_item(clock=clock)], obs.harvest)
+    assert [e for e in ledger.active("decision")] == []   # nothing half-written
+
+
+def test_opinion_T_with_full_payload_is_constructible(ledger, clock):
+    from trellis.decisions import POV
+    good = Candidate(anchor="l1", subject="A call", verdict=Verdict.Y,
+                     rationale="room agreed", participants=["brett"],
+                     emp_lineage="EMP:ends[0]", opinion_verdict=Verdict.T,
+                     opinion_rationale="I think this genuinely needs three views",
+                     opinion_povs=[POV("me", "a"), POV("brett", "b"), POV("alex", "c")],
+                     opinion_owner="alex", opinion_missing="the funder's read",
+                     opinion_revisit_at=clock.t)
+    obs = DecisionObserver(ledger, detect=lambda it: [good],
+                           confirm=lambda c, it: (True, 0.6, ""))
+    Ingestor(ledger).ingest([_item(clock=clock)], obs.harvest)
+    assert len([e for e in ledger.active("decision")]) == 2
+
+
+def test_two_decisions_at_same_anchor_do_not_collide(ledger, clock):
+    """The adversary MED: two DIFFERENT decisions at the same anchor+participants
+    must not collide on one stable id."""
+    obs = DecisionObserver(ledger, detect=lambda it: [
+        _cand(anchor="line-5", subject="Adopt the framing"),
+        _cand(anchor="line-5", subject="Defer the canvas question")],  # same anchor!
+        confirm=lambda c, it: (True, 0.6, ""))
+    Ingestor(ledger).ingest([_item(clock=clock)], obs.harvest)
+    assert len([e for e in ledger.active("decision")]) == 4   # two full pairs, no collision

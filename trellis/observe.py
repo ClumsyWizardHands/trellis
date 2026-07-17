@@ -29,16 +29,22 @@ from datetime import datetime, timedelta
 from typing import Callable, Optional
 
 from .clock import TimeGround
-from .decisions import Decision, DecisionLog, Verdict
+from .decisions import Decision, DecisionLog, Verdict, question_key
 from .ledger import Ledger
 from .sources import Provenance, RawItem
 
 
-def stable_decision_id(source_ref: str, anchor: str, participants: list) -> str:
-    """The identity of an OBSERVED decision — stable across re-reads and light
-    rewording, because it keys off WHERE and WHO, not the exact words."""
+def stable_decision_id(source_ref: str, anchor: str, participants: list,
+                       subject: str = "") -> str:
+    """The identity of an OBSERVED decision. It keys off WHERE (source+anchor) and
+    WHO (participants) so it is stable across re-reads and LIGHT rewording — plus
+    the FOLDED subject key, so two genuinely DIFFERENT decisions at the same
+    anchor do not collide on one id (the adversary's MED), while light rewording
+    (which folds to the same key) still lands on the same node. Heavy rewording
+    changes the id, but the ingest layer retires all prior derived-for-this-source
+    before re-harvesting, so it still folds rather than forking."""
     who = "\x1f".join(sorted(p.strip().lower() for p in participants if p.strip()))
-    raw = f"{source_ref}\x1f{anchor.strip().lower()}\x1f{who}"
+    raw = f"{source_ref}\x1f{anchor.strip().lower()}\x1f{who}\x1f{question_key(subject)}"
     return hashlib.sha256(raw.encode("utf-8")).hexdigest()[:16]
 
 
@@ -59,6 +65,11 @@ class Candidate:
     owner: Optional[str] = None
     revisit_at: Optional[datetime] = None
     missing: Optional[str] = None
+    # if the agent's OPINION is itself a T, it must carry its own T-payload
+    opinion_povs: list = field(default_factory=list)
+    opinion_owner: Optional[str] = None
+    opinion_revisit_at: Optional[datetime] = None
+    opinion_missing: Optional[str] = None
 
 
 # detect(item) -> list[Candidate];  confirm(candidate, item) -> (accept, confidence, note)
@@ -96,14 +107,18 @@ class DecisionObserver:
                                     "confidence": confidence, "note": note},
                                    event_time=item.event_time, tags=("observe", "rejected"))
                 continue
-            did = stable_decision_id(prov.source_refs[0], cand.anchor, cand.participants)
+            did = stable_decision_id(prov.source_refs[0], cand.anchor,
+                                     cand.participants, cand.subject)
             derived += self._write_pair(cand, did, confidence, prov, item, note)
         return derived
 
     def _write_pair(self, cand: Candidate, did: str, confidence: float,
                     prov: Provenance, item: RawItem, note: str) -> list:
         obs_key, op_key = f"obs:{did}", f"op:{did}"
-        # the OBSERVATION — attributed to the room, confidence-tagged, fallible
+        # Construct BOTH nodes BEFORE appending EITHER — so a malformed opinion
+        # (e.g. an opinion T with no POVs, an explicitly-allowed verdict) raises
+        # at construction and leaves NO half-written pair on the append-only
+        # ledger (the adversary's HIGH: a mid-pair crash).
         observation = Decision(
             subject=cand.subject, verdict=cand.verdict, rationale=cand.rationale,
             author=f"observer:{self.agent}", emp_lineage=cand.emp_lineage,
@@ -111,18 +126,19 @@ class DecisionObserver:
             confidence=round(confidence, 3), provenance=prov.to_dict(),
             povs=cand.povs, owner=cand.owner, revisit_at=cand.revisit_at,
             missing=cand.missing)
-        obs_entry = self.log.record(observation, event_time=item.event_time)
-        # the independent confirmation, on the record (maker != confirmer trail)
-        self.ledger.append("observation_check", self.agent,
-                           {"observation_id": observation.id, "accepted": True,
-                            "confidence": round(confidence, 3), "note": note},
-                           event_time=item.event_time, tags=("observe", "confirmed"))
-        # the OPINION — the agent's OWN take, linked
         opinion = Decision(
             subject=f"[my take] {cand.subject}", verdict=cand.opinion_verdict,
             rationale=cand.opinion_rationale, author=self.agent,
             emp_lineage=cand.emp_lineage, key=op_key, opinion_of=observation.id,
-            provenance=prov.to_dict())
+            provenance=prov.to_dict(), povs=cand.opinion_povs,
+            owner=cand.opinion_owner, revisit_at=cand.opinion_revisit_at,
+            missing=cand.opinion_missing)
+        # both valid — now append (observation, its confirmation trail, opinion)
+        obs_entry = self.log.record(observation, event_time=item.event_time)
+        self.ledger.append("observation_check", self.agent,
+                           {"observation_id": observation.id, "accepted": True,
+                            "confidence": round(confidence, 3), "note": note},
+                           event_time=item.event_time, tags=("observe", "confirmed"))
         op_entry = self.log.record(opinion, event_time=item.event_time)
         return [obs_entry.id, op_entry.id]
 

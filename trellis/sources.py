@@ -55,14 +55,17 @@ class RawItem:
         return hashlib.sha256(self.content.encode("utf-8")).hexdigest()[:16]
 
     def identity_key(self) -> str:
-        """Stable identity of the ITEM (not its content). With a real id, two
-        re-dumps of the same message share this key even if the text was
-        corrected — so the correction is detectable. WITHOUT an id, content is
-        folded in so two different id-less messages never collapse together."""
-        basis = [self.source, self.channel, self.item_id,
-                 self.event_time.isoformat()]
-        if not self.item_id:
-            basis.append(self.content)   # disambiguate id-less items
+        """Stable identity of the ITEM (not its content, not its exact time).
+        With a real id, the identity is (source, channel, id) ALONE — so a
+        re-dump that corrects the text OR the timestamp still shares this key and
+        is recognised as a correction (the adversary caught event_time in the
+        hash making a time-corrected re-dump look brand-new). WITHOUT an id,
+        time+content are folded in so two different id-less messages never
+        collapse together."""
+        if self.item_id:
+            basis = [self.source, self.channel, self.item_id]
+        else:
+            basis = [self.source, self.channel, self.event_time.isoformat(), self.content]
         raw = "\x1f".join(basis)
         return hashlib.sha256(raw.encode("utf-8")).hexdigest()[:16]
 
@@ -212,14 +215,28 @@ class Ingestor:
         return res
 
     def _retire_prior_derived(self, item: RawItem) -> None:
-        """Retire (never delete) the derived entries a prior started/complete
-        marker produced for this identity — so a correction or resume replaces
-        cleanly instead of double-counting."""
-        for m in self._all_markers_for(item.identity_key()):
+        """Retire (never delete) EVERY derived entry a prior harvest produced for
+        this source item — so a correction or resume replaces cleanly instead of
+        double-counting. Two sources of derived ids, because a crash mid-harvest
+        (the adversary's HIGH) leaves entries the `started` marker never recorded:
+          1. ids named by any marker's derived_ids, AND
+          2. any entry whose provenance/`from` references this identity_key —
+             which catches the partial, orphaned writes a crash left behind."""
+        key = item.identity_key()
+        targets: set = set()
+        for m in self._all_markers_for(key):
             for did in m.get("derived_ids", []) or []:
-                if self.ledger.get(did) is not None:
-                    self.ledger.retire(did, self.author,
-                                       reason="superseded by re-ingest/correction")
+                targets.add(did)
+        for e in self.ledger.entries():
+            prov = e.body.get("provenance") or {}
+            if key in (prov.get("source_refs") or []) or e.body.get("from") == key:
+                targets.add(e.id)
+        already_retired = {r.body.get("retires") for r in self.ledger.entries()
+                           if r.kind == self.ledger.RETIREMENT_KIND}
+        for did in targets:
+            if did not in already_retired and self.ledger.get(did) is not None:
+                self.ledger.retire(did, self.author,
+                                   reason="superseded by re-ingest/correction")
 
     def _all_markers_for(self, identity_key: str) -> list:
         return [e.body for e in self.ledger.entries()
