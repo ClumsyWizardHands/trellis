@@ -18,6 +18,7 @@ from trellis.decisions import Decision, DecisionLog, POV, Verdict
 from trellis.stage import Outbox, StagedAction
 from trellis.loops import LoopRegistry, LoopRun, LoopSpec, Outcome, BlockKind
 from trellis.memory import Workspace
+from trellis.reflect import ReflectionRitual, SelfChange
 from trellis.verify import (CompletionClaim, Evidence, EvidenceKind, RuleVerifier,
                             record_verdict)
 from web.glyph import GlyphStats, render_glyph
@@ -41,10 +42,10 @@ def seed_ledger() -> Ledger:
     log = DecisionLog(L, g)
     ws = Workspace(demo / "ws", L)
 
-    log.record(Decision("Treat time-blindness as an asset, not just a defect", Verdict.Y,
+    d_time = log.record(Decision("Treat time-blindness as an asset, not just a defect", Verdict.Y,
         "Brett's July framing supersedes the April 'eliminate' framing", "witness",
         "EMP:ends[0]"), event_time=at(1))
-    log.record(Decision("Auto-post the morning digest to #chiefs", Verdict.N,
+    d_digest = log.record(Decision("Auto-post the morning digest to #chiefs", Verdict.N,
         "stage-don't-fire is doctrine; nothing auto-posts", "witness",
         "EMP:principles[0]", returnable_note="reopen if team ratifies autonomous posting"),
         event_time=at(0, 3))
@@ -60,11 +61,23 @@ def seed_ledger() -> Ledger:
         "EMP:means[0]", povs=povs, owner="alex", missing="whether verification changes it",
         revisit_at=at(2)), event_time=at(9))
 
-    for pth, why in [
-        ("read/current-read.md", "the current synthesized read exists nowhere else"),
-        ("epitaphs/2026-07-14-s1.md", "session-final open threads exist nowhere else once the window closes"),
-        ("skills/end-of-day-harvest.md", "a learned routine the team could not re-derive mechanically")]:
-        ws.write(pth, "content " * 20, "witness", why)
+    for pth, title, why in [
+        ("read/current-read.md", "The current read on the CF account",
+         "the current synthesized read exists nowhere else"),
+        ("epitaphs/2026-07-14-s1.md", "Epitaph — session 2026-07-14 (open threads)",
+         "session-final open threads exist nowhere else once the window closes"),
+        ("skills/end-of-day-harvest.md", "Skill: the end-of-day harvest routine",
+         "a learned routine the team could not re-derive mechanically")]:
+        ws.write(pth, f"# {title}\n\n" + "synthesised body " * 18, "witness", why, title=title)
+
+    # yesterday's reflection — snapshots a smaller record, so today shows deltas
+    refl = ReflectionRitual(L, author="witness",
+                            verifier=RuleVerifier("verifier:reflect-check", L, g), ground=g)
+    refl.run("s-2026-07-14",
+             "held the read and put the day's opinions on the record",
+             "Peter's asks are about findability, not features — a synthesized read "
+             "that lives in no single transcript",
+             event_time=at(1))
 
     reg = LoopRegistry(L, g)
     spec = LoopSpec("witness.watch", "keep the read current; put opinions on the record",
@@ -97,6 +110,12 @@ def seed_ledger() -> Ledger:
             run.tick()
             run.blocked(BlockKind.NEEDS_INPUT, on="pricing canon from Brett")
 
+    # a trigger re-surfaces the settled 'auto-post' N — it does NOT flip it; it
+    # marks it as needing re-triangulation (shows on the attention rail).
+    log.reopen(d_digest.body["decision_id"],
+               "the team asked about autonomous posting again in standup", "alex",
+               event_time=at(0, 2))
+
     box = Outbox(L, g)
     box.stage(StagedAction("discord_post", "#chiefs-of-staffs",
         "Read updated: July framing of time-blindness adopted; canvas question is a live T owned by Alex.",
@@ -104,6 +123,21 @@ def seed_ledger() -> Ledger:
     box.stage(StagedAction("email_draft", "peter@turntwo.org",
         "Draft: the CF pricing one-pager (needs your review before it goes anywhere near a CEO).",
         created_by="witness"))
+
+    # today's reflection — the full record, with a self-change staged as a
+    # VERIFIED proposal (an independent verifier confirms it before it may act).
+    refl.run("s-2026-07-15",
+             "kept the read current; surfaced two live triangulations and one "
+             "re-opened question",
+             "the team is building memory in opposite directions; that fork is the "
+             "day's defining tension and belongs on the record verbatim",
+             self_change=SelfChange(
+                 target="EMP:friction (append)",
+                 proposal="record the recurring ownership burn so a future session "
+                          "does not repeat it",
+                 rationale="the burn recurred and is grounded in the decisions on record",
+                 evidence_ids=[d_time.id, d_digest.id]),
+             event_time=NOW)
     return L
 
 

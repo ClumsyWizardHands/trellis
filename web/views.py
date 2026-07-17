@@ -170,9 +170,12 @@ def trust_panel(ledger: Ledger, ground: Optional[TimeGround] = None) -> list[dic
 def memory_map(ledger: Ledger, ground: Optional[TimeGround] = None) -> list[dict]:
     g = _ground(ledger, ground)
     rows = []
+    active_ids = {e.id for e in ledger.active("memory_write")}
     for e in ledger.entries():
-        if e.kind == "memory_write":
-            rows.append({"path": e.body.get("path"), "author": e.author,
+        if e.kind == "memory_write" and e.id in active_ids:   # titles of live memory only
+            rows.append({"path": e.body.get("path"),
+                         "title": e.body.get("title") or e.body.get("path"),
+                         "author": e.author,
                          "when": e.stamp.event_time.isoformat(),
                          "age": g.age_phrase(e.stamp.event_time),
                          "why": e.body.get("synthesis_justification", "")[:120]})
@@ -188,10 +191,14 @@ _KIND_STORY = {
     "panel_verdict": lambda b: f"panel {b.get('status')} a claim by {b.get('maker')}",
     "loop_run_end": lambda b: f"loop {b.get('loop')} → {b.get('outcome')}",
     "staged_action": lambda b: f"{b.get('event','staged')} a {b.get('kind')} to {b.get('target')}",
-    "memory_write": lambda b: f"wrote memory {b.get('path')}",
+    "memory_write": lambda b: f"wrote memory “{b.get('title') or b.get('path')}”",
     "pass": lambda b: "coordinated a pass",
     "declassification": lambda b: "a human declassified content across a boundary",
     "discord_message": lambda b: f"ingested a message in {b.get('channel_name') or b.get('channel')}",
+    "reflection_log": lambda b: (f"reflected on the day (cited {b.get('cited_count', 0)} events"
+                                 + (", proposed a self-change" if b.get('self_change') else "") + ")"),
+    "reopen": lambda b: f"re-opened “{b.get('subject')}” — {b.get('trigger')}",
+    "retirement": lambda b: f"retired an entry from the current picture ({b.get('reason') or 'no reason given'})",
 }
 
 
@@ -224,3 +231,84 @@ def growth_stats(ledger: Ledger, ground: Optional[TimeGround] = None) -> dict:
     source of truth."""
     from trellis.reflect import self_image_stats
     return self_image_stats(ledger, _ground(ledger, ground))
+
+
+# ---- the reflection portal: today's self-image beside yesterday's ----------
+
+def reflection_view(ledger: Ledger, ground: Optional[TimeGround] = None) -> Optional[dict]:
+    """The Reflection page's data — produced by the harness's reflection ritual
+    (trellis.reflect), never mocked. Today's grounded self-image, the cited
+    'why I look like this', the day's deltas vs yesterday, and any self-change
+    shown as a VERIFIED proposal. None if the ritual hasn't run yet."""
+    from trellis.reflect import REFLECTION_KIND
+    from web.glyph import GlyphStats, reflection as glyph_reflection
+    g = _ground(ledger, ground)
+    refls = sorted((e for e in ledger.entries() if e.kind == REFLECTION_KIND),
+                   key=lambda e: e.stamp.event_time)
+    if not refls:
+        return None
+    today, yest = refls[-1], (refls[-2] if len(refls) > 1 else None)
+    t = today.body.get("self_image", {}) or {}
+    y = (yest.body.get("self_image", {}) if yest else {}) or {}
+    deltas = {}
+    for k in ("entries", "decisions", "verified", "checked", "memories", "open_ts", "age_days"):
+        if k in t:
+            now_v = t.get(k)
+            prev_v = y.get(k) if yest else None
+            d = None
+            if yest and isinstance(now_v, (int, float)) and isinstance(prev_v, (int, float)):
+                d = round(now_v - prev_v, 2)
+            deltas[k] = {"now": now_v, "prev": prev_v, "delta": d}
+    return {
+        "when": today.stamp.event_time.isoformat(),
+        "age": g.age_phrase(today.stamp.event_time),
+        "narrative": today.body.get("narrative"),
+        "learned": today.body.get("learned"),
+        "self_image": t,
+        "why": glyph_reflection(GlyphStats.from_growth(t)) if t else [],
+        "cites": today.body.get("cites", []),
+        "cited_count": today.body.get("cited_count", 0),
+        "self_change": today.body.get("self_change"),
+        "deltas": deltas,
+        "has_yesterday": yest is not None,
+        "yesterday_age": g.age_phrase(yest.stamp.event_time) if yest else None,
+    }
+
+
+# ---- a decision that OPENS UP: the WALK reconstruction ---------------------
+
+def decision_walk(ledger: Ledger, decision_id: str,
+                  ground: Optional[TimeGround] = None) -> Optional[dict]:
+    """Re-inhabit one decision (read-only): its verdict-on-record, the why, the
+    named POVs, and the breadcrumbs upstream toward the EMP node. This is the
+    'decisions that open up' view — memory as navigation, made visible."""
+    from trellis.decisions import DecisionLog
+    from trellis.navigate import Navigator
+    g = _ground(ledger, ground)
+    w = Navigator(DecisionLog(ledger, g)).walk(decision_id)
+    if w is None:
+        return None
+    return {"decision_id": w.decision_id, "subject": w.subject,
+            "verdict": w.as_recorded, "rationale": w.rationale,
+            "povs": w.povs, "upstream": w.upstream, "reopened": w.reopened,
+            "related_titles": [{"title": t, "path": p} for t, p in w.related_titles]}
+
+
+# ---- open questions: the one attention rail (hidden-nos + reopened) --------
+
+def open_questions_view(ledger: Ledger, ground: Optional[TimeGround] = None) -> list[dict]:
+    from trellis.decisions import DecisionLog
+    g = _ground(ledger, ground)
+    log = DecisionLog(ledger, g)
+    hidden_ids = {e.id for e in log.hidden_nos()}
+    out = []
+    for e in log.open_questions():
+        out.append({
+            "id": e.body.get("decision_id"),
+            "subject": e.body.get("subject"),
+            "verdict": e.body.get("verdict"),
+            "kind": "hidden-no" if e.id in hidden_ids else "reopened",
+            "owner": e.body.get("owner"),
+            "missing": e.body.get("missing"),
+        })
+    return out

@@ -67,6 +67,46 @@ def test_growth_stats_are_real_numbers(populated, ground):
     assert s["decisions"] == 3 and s["open_ts"] == 1 and s["entries"] > 0
 
 
+# ---- the reflection portal views (Phase 3, pure) ---------------------------
+
+def test_reflection_view_none_until_ritual_runs(populated, ground):
+    assert views.reflection_view(populated, ground) is None
+
+
+def test_reflection_view_reads_the_ritual_output(populated, ground):
+    from trellis.reflect import ReflectionRitual, SelfChange
+    from trellis.verify import RuleVerifier
+    d = views.decision_timeline(populated, ground)[0]
+    r = ReflectionRitual(populated, author="witness:r",
+                         verifier=RuleVerifier("verifier:x", populated), ground=ground)
+    r.run("s1", "held the read; this session ends and the record survives",
+          "a synthesized read on the team's memory fork that exists in no single transcript",
+          self_change=SelfChange("EMP:friction", "record the burn", "it recurred",
+                                 evidence_ids=[populated.entries()[0].id]))
+    v = views.reflection_view(populated, ground)
+    assert v is not None
+    assert v["cited_count"] >= 1 and v["self_image"]["entries"] > 0
+    assert v["self_change"]["verified"] is True
+
+
+def test_decision_walk_reconstructs_a_decision(populated, ground):
+    d = views.decision_timeline(populated, ground)[0]
+    w = views.decision_walk(populated, d["id"], ground)
+    assert w is not None and w["verdict"] in ("Y", "N", "T")
+    assert w["subject"] == d["subject"]
+    assert views.decision_walk(populated, "nonexistent", ground) is None
+
+
+def test_open_questions_unions_hidden_and_reopened(populated, ground):
+    from trellis.decisions import DecisionLog
+    # the fixture already has one hidden-no T; reopen the N to add a reopened one
+    n = [r for r in views.decision_timeline(populated, ground) if r["verdict"] == "N"][0]
+    DecisionLog(populated, ground).reopen(n["id"], "raised again", "alex")
+    oq = views.open_questions_view(populated, ground)
+    kinds = {q["kind"] for q in oq}
+    assert kinds == {"hidden-no", "reopened"}
+
+
 # ---- glyph: deterministic + honest -----------------------------------------
 
 def test_glyph_is_deterministic():
