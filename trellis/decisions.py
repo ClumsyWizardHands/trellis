@@ -92,7 +92,24 @@ class Decision:
     missing: Optional[str] = None    # T: the specific named missing piece
     returnable_note: Optional[str] = None  # N: what would reopen it
     parent_id: Optional[str] = None  # recursion: decisions nest under decisions
+    # --- the contemplative-ingestion extension (Phase B) ---
+    key: Optional[str] = None        # explicit question_key override (e.g. "obs:<id>"),
+                                     # so an observation and its opinion get DISTINCT,
+                                     # stable identities instead of colliding on a subject slug
+    attributed_to: Optional[list] = None   # for an OBSERVATION: the room's participants
+                                     # (whose decision it was) — distinct from `author`
+                                     # (who RECORDED it)
+    confidence: Optional[float] = None     # how sure, given only the words (0..1)
+    provenance: Optional[dict] = None      # Provenance.to_dict(): source_refs, fallibility
+    opinion_of: Optional[str] = None       # for an OPINION node: the observation id it's about
     id: str = field(default_factory=lambda: uuid.uuid4().hex[:12])
+
+    def effective_key(self) -> str:
+        """The question identity used for anti-fork. An explicit `key` (a stable
+        obs:/op: identity from the source) wins; otherwise the folded subject
+        slug (the ordinary case). Keying observations off a stable id, not the
+        free-text subject, is what makes re-harvest fold instead of fork."""
+        return self.key.strip() if self.key and self.key.strip() else question_key(self.subject)
 
     def __post_init__(self):
         # coerce/validate the verdict FIRST. A raw string like "t" or "maybe"
@@ -137,7 +154,7 @@ class Decision:
         return {
             "decision_id": self.id,
             "subject": self.subject,
-            "question_key": question_key(self.subject),
+            "question_key": self.effective_key(),
             "verdict": self.verdict.value,
             "rationale": self.rationale,
             "emp_lineage": self.emp_lineage,
@@ -148,6 +165,10 @@ class Decision:
             "missing": self.missing,
             "returnable_note": self.returnable_note,
             "parent_id": self.parent_id,
+            "attributed_to": list(self.attributed_to) if self.attributed_to else None,
+            "confidence": self.confidence,
+            "provenance": self.provenance,
+            "opinion_of": self.opinion_of,
         }
 
 
@@ -183,7 +204,7 @@ class DecisionLog:
         # the brand-new-decision path; it refuses a collision outright. Changing
         # a live answer must go through resolve() (which supersedes, with
         # lineage) — reachable via Navigator.reopen()+resolve or decide().
-        qk = question_key(decision.subject)
+        qk = decision.effective_key()
         clash = self.active_head(qk)
         if clash is not None:
             raise CollidingDecisionError(

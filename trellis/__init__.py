@@ -24,6 +24,12 @@ from .navigate import (Navigator, Walk, NavHit, ResolvedHeadCache,
 from .reflect import (ReflectionRitual, SelfChange, self_image_stats,
                       reflection_loop_spec, DreadError, UnverifiedSelfChangeError,
                       ReflectionSynthesisError, REFLECTION_KIND)
+from .sources import (RawItem, Provenance, Ingestor, IngestResult, SourceAdapter,
+                      MARKER_KIND)
+from .observe import (Candidate, DecisionObserver, conversation_velocity, Velocity,
+                      stable_decision_id, synthesize_read)
+from .vault import (VaultReconciler, ReconcileReport, Drift, note_state,
+                    render_frontmatter, hash_content)
 from .surfaces import Surface, ConversationKey, PrivacyBoundaryError
 from .passes import Pass, PassStatus, TurdDropError, PassExchange
 from .loops import LoopSpec, LoopRun, Outcome, LoopRegistry, LoopBudgetExceeded

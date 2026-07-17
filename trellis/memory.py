@@ -22,6 +22,7 @@ blocks for files+git in March 2026; Anthropic's memory tool is file ops):
 
 from __future__ import annotations
 
+import hashlib
 import re
 from dataclasses import dataclass
 from pathlib import Path
@@ -197,6 +198,11 @@ class Workspace:
             body={"path": rel,
                   "title": the_title,
                   "bytes": len(content.encode("utf-8")),
+                  # a content HASH, not just a byte-count — so vault/ledger drift
+                  # (a human editing a note in Obsidian) is DETECTABLE, and the
+                  # vault is honestly reconcilable with the ledger (plan v2 §3.2,
+                  # the stress-test's "reconstructable from the ledger" flaw).
+                  "content_hash": hashlib.sha256(content.encode("utf-8")).hexdigest()[:16],
                   "synthesis_justification": synthesis_justification,
                   "prior_history": history_ref},
             tags=("memory",),
