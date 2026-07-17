@@ -19,6 +19,9 @@ from trellis.stage import Outbox, StagedAction
 from trellis.loops import LoopRegistry, LoopRun, LoopSpec, Outcome, BlockKind
 from trellis.memory import Workspace
 from trellis.reflect import ReflectionRitual, SelfChange
+from trellis.sources import Ingestor, RawItem
+from trellis.observe import Candidate, DecisionObserver
+from trellis.curiosity import Question, QuestionLog, assumption_key
 from trellis.verify import (CompletionClaim, Evidence, EvidenceKind, RuleVerifier,
                             record_verdict)
 from web.glyph import GlyphStats, render_glyph
@@ -115,6 +118,58 @@ def seed_ledger() -> Ledger:
     log.reopen(d_digest.body["decision_id"],
                "the team asked about autonomous posting again in standup", "alex",
                event_time=at(0, 2))
+
+    # --- the contemplative backdrop: ingest two moments, understand each as an
+    # observation (attributed to the room) + the agent's own opinion ---
+    items = [
+        RawItem(source="transcript", channel="chiefs-sync", kind="transcript",
+                content="brett: let's lock the July pricing framing. alex: agreed — "
+                        "but does the funder actually know?",
+                event_time=at(1), item_id="t-0714"),
+        RawItem(source="media", channel="brett-voice-note", kind="media_transcript",
+                content="brett voice note: the canvas question can wait until we verify",
+                event_time=at(0, 5), item_id="v-0715", machine_transcribed=True),
+    ]
+    cands = {
+        "t-0714": Candidate(
+            anchor="line-4", subject="Lock the July pricing framing", verdict=Verdict.Y,
+            rationale="Brett proposed it and Alex agreed in the sync",
+            participants=["brett", "alex"], emp_lineage="EMP:ends[0]",
+            opinion_verdict=Verdict.N,
+            opinion_rationale="I doubt the room actually tested whether the funder is "
+            "aligned — that assumption sat unspoken under the agreement"),
+        "v-0715": Candidate(
+            anchor="vn-1", subject="Defer the canvas question until verification",
+            verdict=Verdict.Y, rationale="Brett's voice note says it can wait until verified",
+            participants=["brett"], emp_lineage="EMP:means[0]",
+            opinion_verdict=Verdict.Y,
+            opinion_rationale="agree — deferring is consistent with verification-first"),
+    }
+    conf = {"t-0714": 0.72, "v-0715": 0.44}   # the voice note is machine-heard → lower
+    observer = DecisionObserver(
+        L, agent="witness", ground=g,
+        detect=lambda item: [cands[item.item_id]],
+        confirm=lambda c, item: (True, conf[item.item_id], "supported by the quoted lines"))
+    Ingestor(L, g).ingest(items, observer.harvest)
+
+    # --- the contemplating mind's open questions, with the staleness rail ---
+    ql = QuestionLog(L, g)
+    q_funder = Question(
+        title="Am I assuming the funder is aligned on the July pricing?",
+        assumption="the funder is aligned on the July pricing framing",
+        what_would_resolve="a direct statement from the funder, or Brett confirming he checked",
+        owner="witness", revisit_at=at(1))          # revisit already past → overdue
+    ql.ask(q_funder, "witness")
+    ak = assumption_key(q_funder.assumption)
+    ql.record_seek(ak, "searched the transcripts and Discord for 'funder pricing'",
+                   map_changed=False, delta_refs=[], author="witness")
+    ql.record_seek(ak, "re-read Friday's sync — still no funder confirmation",
+                   map_changed=False, delta_refs=[], author="witness")
+    ql.ask(Question(
+        title="What actually changed between the April and July framings?",
+        assumption="the July framing is a real shift, not a re-wording",
+        what_would_resolve="a side-by-side of the April vs July language with dates",
+        owner="witness", revisit_at=at(-3)), "witness")   # revisit in the future → not stale
 
     box = Outbox(L, g)
     box.stage(StagedAction("discord_post", "#chiefs-of-staffs",

@@ -50,6 +50,9 @@ def esc(x) -> str:
 
 NAV = [
     ("/", "Overview", "the one-screen read: what's live right now"),
+    ("/map", "The Map", "what the room decided — and what the agent thinks about it"),
+    ("/curiosities", "Assumptions", "where it knows it's assuming, and what it's chasing"),
+    ("/ingestion", "Ingestion", "what's been taken in and understood — coverage and gaps"),
     ("/decisions", "Decisions", "every Yes / No / Triangulate — click one to walk its reasoning"),
     ("/reflection", "Reflection", "once a day, the agent looks at itself in the mirror of its record"),
     ("/loops", "Loops", "the background jobs, and whether each is healthy or needs a look"),
@@ -412,6 +415,141 @@ def _activity_body(led: Ledger) -> str:
     return "".join(out)
 
 
+def _conf_pill(conf) -> str:
+    if conf is None:
+        return '<span class="pill hn">unproven</span>'
+    pct = int(conf * 100)
+    cls = "Y" if conf >= 0.66 else "T" if conf >= 0.4 else "hn"
+    return f'<span class="pill {cls}">{pct}% sure</span>'
+
+
+def _map_body(led: Ledger) -> str:
+    rows = views.observations_map(led)
+    out = [_pagehead("The Map",
+                     "What the room decided, as the agent understood it — and, beside each, "
+                     "the agent's own opinion. Confidence is stated; the transcript may be "
+                     "wrong; click any to see exactly how it got there.")]
+    out.append('<div class="legend">Each card is a <b>decision the agent observed</b> in the '
+               'record, attributed to the people in the room — <b>not</b> the agent\'s own '
+               'ruling. Its own take sits beside it. Low confidence and machine-transcribed '
+               'sources are flagged, never hidden.</div>')
+    if not rows:
+        out.append('<div class="panel"><div class="muted small">Nothing ingested yet — the '
+                   'Map fills in as transcripts and Discord come through Ingestion.</div></div>')
+    for r in rows:
+        who = ", ".join(r["attributed_to"]) or "—"
+        machine = ' <span class="pill hn">machine-heard</span>' if r["machine"] else ""
+        aff = f' · <span class="good small">✓ affirmed ×{r["affirmed"]}</span>' if r["affirmed"] else ""
+        op = ""
+        if r["opinion_verdict"]:
+            op = (f'<div class="muted small" style="margin-top:6px">'
+                  f'<b>my take [{esc(r["opinion_verdict"])}]:</b> {esc(r["opinion"])[:150]}</div>')
+        out.append(f'<div class="panel"><div class="row"><div>'
+                   f'<span class="pill {esc(r["verdict"])}">{esc(r["verdict"])}</span> '
+                   f'<a href="/observation/{esc(r["id"])}">{esc(r["subject"])}</a>{machine}'
+                   f'<div class="muted small">the room: {esc(who)}{aff}</div>{op}</div>'
+                   f'<div>{_conf_pill(r["confidence"])}<div class="muted small" '
+                   f'style="text-align:right;margin-top:4px">how it got here →</div></div></div></div>')
+    return "".join(out)
+
+
+def _observation_body(led: Ledger, obs_id: str) -> str:
+    lin = views.observation_lineage(led, obs_id)
+    if lin is None:
+        return _pagehead("Not found", "No observation with that id.") + \
+               '<div class="panel"><a href="/map">← the Map</a></div>'
+    out = [_pagehead(f"How I got here · {lin['subject']}",
+                     "The full lineage: what the room decided, what I think about it, the "
+                     "moments it rests on, and how sure I am — with the honest caveats.")]
+    out.append('<div class="panel"><a href="/map">← the Map</a></div>')
+    # the observation
+    out.append('<div class="panel"><h3>What the room decided (attributed to them)</h3>')
+    out.append(f'<div class="kv" style="margin-bottom:8px"><span class="pill {esc(lin["verdict"])}">'
+               f'{esc(lin["verdict"])}</span> {_conf_pill(lin["confidence"])}'
+               + (' <span class="pill hn">machine-heard</span>' if lin["machine"] else '') + '</div>')
+    out.append(f'<div>{esc(lin["rationale"])}</div>')
+    out.append(f'<div class="muted small" style="margin-top:6px">the room: '
+               f'{esc(", ".join(lin["attributed_to"]) or "—")}</div>')
+    # affirm
+    out.append('<form method="post" action="/affirm" style="margin-top:12px;display:flex;gap:8px;align-items:center">'
+               f'<input type="hidden" name="decision_id" value="{esc(lin["id"])}">'
+               '<input name="human" placeholder="your name" required>'
+               '<button>✓ yes, that\'s right</button>'
+               f'<span class="muted small">affirming compounds confidence — it never gates the agent'
+               + (f' · already affirmed ×{lin["affirmed"]}' if lin["affirmed"] else '') + '</span></form>')
+    out.append('</div>')
+    # honesty caveats
+    out.append('<div class="legend"><b>Honesty:</b> I only had the words — the transcript '
+               'can be wrong, sarcastic, or out of order. '
+               + ('The time is the transcript\'s claim, not ground truth. ' if lin["event_time_reconstructed"] else '')
+               + ('This rests on machine transcription (lower confidence). ' if lin["machine"] else '')
+               + 'Confidence above is my honest estimate, stated not felt.</div>')
+    # the agent's opinion
+    if lin["opinion"]:
+        o = lin["opinion"]
+        out.append('<div class="panel"><h3>What I think about it (my own opinion)</h3>'
+                   f'<div class="kv" style="margin-bottom:8px"><span class="pill {esc(o.get("verdict"))}">'
+                   f'{esc(o.get("verdict"))}</span></div><div>{esc(o.get("rationale"))}</div></div>')
+    # cited moments
+    out.append('<div class="panel"><h3>The moments it rests on</h3>')
+    for c in lin["cited"]:
+        m = ' · machine-transcribed' if c["machine"] else ''
+        out.append(f'<div class="row"><span class="small">{esc(c["source"])} · {esc(c["channel"])} '
+                   f'<span class="muted">({esc(c["kind"])}{m})</span></span>'
+                   f'<span class="muted small"><code>{esc(c["ref"])}</code></span></div>')
+    if not lin["cited"]:
+        out.append('<div class="muted small">no source refs recorded.</div>')
+    out.append('</div>')
+    return "".join(out)
+
+
+def _curiosities_body(led: Ledger) -> str:
+    c = views.curiosities(led)
+    out = [_pagehead("Assumptions & Curiosities",
+                     "Where the agent knows it's assuming, and what it's actively trying to "
+                     "learn. This is the contemplating mind, made watchable.")]
+    out.append('<div class="legend">An open question that sits <b class="attn">past its '
+               'revisit date</b> lights up — a curiosity can\'t be emitted and forgotten. '
+               'A <b>dry streak</b> means it keeps looking and nothing moves: a signal to '
+               'ask a human, not to declare victory. "I searched" is never "I understand."</div>')
+    if c["stale_count"]:
+        out.append(f'<div class="attn small" style="margin-bottom:10px">⚠ {c["stale_count"]} '
+                   'question(s) overdue — surface these before anything else.</div>')
+    for q in c["open"]:
+        badge = '<span class="pill hn">overdue</span> ' if q["stale"] else ""
+        dry = (f' · <span class="warn small">dry streak {q["dry_streak"]}</span>'
+               if q["dry_streak"] else "")
+        reask = f' · re-asked ×{q["reasked"]}' if q["reasked"] else ""
+        out.append(f'<div class="panel"><div>{badge}<b>{esc(q["title"])}</b></div>'
+                   f'<div class="muted small" style="margin-top:4px">assuming: '
+                   f'{esc(q["assumption"])}</div>'
+                   f'<div class="muted small">would resolve it: {esc(q["what_would_resolve"])}</div>'
+                   f'<div class="muted small">owner: {esc(q["owner"])}{dry}{reask}</div></div>')
+    if not c["open"]:
+        out.append('<div class="panel"><div class="muted small">No open questions — either '
+                   'nothing\'s puzzling, or the agent hasn\'t contemplated yet today.</div></div>')
+    return "".join(out)
+
+
+def _ingestion_body(led: Ledger) -> str:
+    s = views.ingestion_status(led)
+    out = [_pagehead("Ingestion",
+                     "What's been taken in and understood — our own ledger as the truth of "
+                     "what we know, honest about how much rests on machine transcription.")]
+    out.append(f'<div class="panel"><div class="kv">'
+               f'<span class="chip">{s["items_ingested"]} items ingested</span>'
+               f'<span class="chip">{s["observations"]} decisions understood</span>'
+               f'<span class="chip">{s["machine_transcribed"]} machine-transcribed</span></div></div>')
+    out.append('<div class="panel"><h3>By source</h3>')
+    for src, n in (s.get("by_source") or {}).items():
+        out.append(f'<div class="row"><span>{esc(src)}</span><span class="muted small">{n} items</span></div>')
+    if not s.get("by_source"):
+        out.append('<div class="muted small">nothing ingested yet — point the adapters at '
+                   'the Atlas dumps to begin.</div>')
+    out.append('</div>')
+    return "".join(out)
+
+
 # ---- routes ----------------------------------------------------------------
 
 def _respond(active: str, body: str, frag: bool) -> HTMLResponse:
@@ -421,6 +559,40 @@ def _respond(active: str, body: str, frag: bool) -> HTMLResponse:
 @app.get("/", response_class=HTMLResponse)
 def home(frag: int = 0):
     return _respond("/", _overview_body(_ledger()), bool(frag))
+
+
+@app.get("/map", response_class=HTMLResponse)
+def the_map(frag: int = 0):
+    return _respond("/map", _map_body(_ledger()), bool(frag))
+
+
+@app.get("/observation/{obs_id}", response_class=HTMLResponse)
+def observation_detail(obs_id: str, frag: int = 0):
+    body = _observation_body(_ledger(), obs_id)
+    if frag:
+        return HTMLResponse(body)
+    return HTMLResponse(SHELL.format(
+        title="The Map", style=STYLE, ledger=esc(Path(LEDGER_PATH).name),
+        nav=_nav_html("/map"), path=f"/observation/{obs_id}", body=body))
+
+
+@app.get("/curiosities", response_class=HTMLResponse)
+def curiosities_page(frag: int = 0):
+    return _respond("/curiosities", _curiosities_body(_ledger()), bool(frag))
+
+
+@app.get("/ingestion", response_class=HTMLResponse)
+def ingestion_page(frag: int = 0):
+    return _respond("/ingestion", _ingestion_body(_ledger()), bool(frag))
+
+
+@app.post("/affirm")
+def affirm(decision_id: str = Form(...), human: str = Form(...)):
+    led = _ledger()
+    led.append(kind="affirmation", author=human,
+               body={"decision_id": decision_id, "via": "web-ui"},
+               tags=("affirm", decision_id))
+    return RedirectResponse(f"/observation/{decision_id}", status_code=303)
 
 
 @app.get("/decisions", response_class=HTMLResponse)

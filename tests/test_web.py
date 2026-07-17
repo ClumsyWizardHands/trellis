@@ -162,3 +162,62 @@ def test_witness_cycle_feeds_the_views(ledger, ground, tmp_path):
     assert stats["decisions"] == 1 and stats["checked"] >= 1
     # and it renders
     assert render_glyph(GlyphStats.from_growth(stats)).startswith("<svg")
+
+
+# ---- the contemplative-ingestion surfaces (Phase E) ------------------------
+
+def _ingest_two(ledger, ground):
+    from trellis.sources import Ingestor, RawItem
+    from trellis.observe import Candidate, DecisionObserver
+    from trellis.decisions import Verdict
+    item = RawItem(source="transcript", channel="sync", kind="transcript",
+                   content="brett: lock it. alex: ok", event_time=ground.now(),
+                   item_id="t1", machine_transcribed=True)
+    cand = Candidate(anchor="l1", subject="Lock the framing", verdict=Verdict.Y,
+                     rationale="the room agreed", participants=["brett", "alex"],
+                     emp_lineage="EMP:ends[0]", opinion_verdict=Verdict.N,
+                     opinion_rationale="I doubt the funder was consulted")
+    obs = DecisionObserver(ledger, agent="witness", ground=ground,
+                           detect=lambda it: [cand],
+                           confirm=lambda c, it: (True, 0.5, "supported"))
+    Ingestor(ledger, ground).ingest([item], obs.harvest)
+
+
+def test_map_pairs_observation_with_opinion(ledger, ground):
+    _ingest_two(ledger, ground)
+    rows = views.observations_map(ledger, ground)
+    assert len(rows) == 1
+    r = rows[0]
+    assert r["attributed_to"] == ["brett", "alex"] and r["confidence"] == 0.5
+    assert r["machine"] is True and r["opinion_verdict"] == "N"
+
+
+def test_observation_lineage_shows_how_it_got_there(ledger, ground):
+    _ingest_two(ledger, ground)
+    obs_id = views.observations_map(ledger, ground)[0]["id"]
+    lin = views.observation_lineage(ledger, obs_id, ground)
+    assert lin["confidence"] == 0.5 and lin["transcript_fallible"] is True
+    assert lin["opinion"]["verdict"] == "N"
+    assert lin["cited"] and lin["cited"][0]["source"] == "transcript"
+    assert lin["cited"][0]["machine"] is True
+    assert views.observation_lineage(ledger, "nope", ground) is None
+
+
+def test_curiosities_surfaces_the_stale_rail(ledger, ground, clock):
+    from trellis.curiosity import Question, QuestionLog
+    from datetime import timedelta
+    ql = QuestionLog(ledger, ground)
+    ql.ask(Question("Overdue one", "assumption a", "resolve a", "witness",
+                    ground.now() - timedelta(days=1)), "witness")   # already overdue
+    ql.ask(Question("Fresh one", "assumption b", "resolve b", "witness",
+                    ground.now() + timedelta(days=3)), "witness")
+    c = views.curiosities(ledger, ground)
+    assert c["stale_count"] == 1
+    assert c["open"][0]["stale"] is True         # overdue sorted first
+
+
+def test_ingestion_status_counts_and_flags_machine(ledger, ground):
+    _ingest_two(ledger, ground)
+    s = views.ingestion_status(ledger, ground)
+    assert s["items_ingested"] == 1 and s["machine_transcribed"] == 1
+    assert s["observations"] == 1

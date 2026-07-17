@@ -312,3 +312,120 @@ def open_questions_view(ledger: Ledger, ground: Optional[TimeGround] = None) -> 
             "missing": e.body.get("missing"),
         })
     return out
+
+
+# ==== the contemplative-ingestion surfaces (Phase E) ========================
+
+def observations_map(ledger: Ledger, ground: Optional[TimeGround] = None) -> list[dict]:
+    """The vault as a navigable list: what the room decided (observations),
+    each with the agent's own opinion and its confidence. Click one for the
+    full lineage (how the agent got there)."""
+    g = _ground(ledger, ground)
+    active = ledger.active("decision")
+    opinions = {e.body.get("opinion_of"): e for e in active if e.body.get("opinion_of")}
+    rows = []
+    for e in active:
+        if not str(e.author).startswith("observer:"):
+            continue
+        op = opinions.get(e.body.get("decision_id"))
+        rows.append({
+            "id": e.body.get("decision_id"),
+            "subject": e.body.get("subject"),
+            "verdict": e.body.get("verdict"),
+            "attributed_to": e.body.get("attributed_to") or [],
+            "confidence": e.body.get("confidence"),
+            "machine": (e.body.get("provenance") or {}).get("machine_transcribed", False),
+            "opinion_verdict": op.body.get("verdict") if op else None,
+            "opinion": op.body.get("rationale") if op else None,
+            "affirmed": _affirmations(ledger).get(e.body.get("decision_id"), 0),
+            "age": g.age_phrase(e.stamp.event_time),
+        })
+    rows.sort(key=lambda r: (r["confidence"] if r["confidence"] is not None else 1))
+    return rows
+
+
+def _affirmations(ledger: Ledger) -> dict:
+    out: dict = {}
+    for e in ledger.entries():
+        if e.kind == "affirmation":
+            did = e.body.get("decision_id")
+            out[did] = out.get(did, 0) + 1
+    return out
+
+
+def observation_lineage(ledger: Ledger, observation_id: str,
+                        ground: Optional[TimeGround] = None) -> Optional[dict]:
+    """The one-click 'how you got here': the observation, the agent's opinion,
+    the cited source moments it rests on, the confidence and its honest caveats,
+    and the lineage upstream. Extends the decision WALK for observed decisions."""
+    g = _ground(ledger, ground)
+    obs = None
+    for e in ledger.entries():
+        if e.kind == "decision" and e.body.get("decision_id") == observation_id:
+            obs = e
+            break
+    if obs is None:
+        return None
+    b = obs.body
+    opinion = next((e.body for e in ledger.active("decision")
+                    if e.body.get("opinion_of") == observation_id), None)
+    # resolve the cited source moments via the ingest markers
+    prov = b.get("provenance") or {}
+    marker_by_key = {}
+    for e in ledger.entries():
+        if e.kind == "ingest_marker" and e.body.get("phase") == "complete":
+            marker_by_key[e.body.get("identity_key")] = e.body
+    cited = []
+    for ref in prov.get("source_refs", []):
+        m = marker_by_key.get(ref, {})
+        cited.append({"ref": ref, "source": m.get("source", "?"),
+                      "channel": m.get("channel", "?"), "kind": m.get("kind", "?"),
+                      "machine": m.get("machine_transcribed", False)})
+    return {
+        "id": observation_id,
+        "subject": b.get("subject"),
+        "verdict": b.get("verdict"),
+        "rationale": b.get("rationale"),
+        "attributed_to": b.get("attributed_to") or [],
+        "confidence": b.get("confidence"),
+        "machine": prov.get("machine_transcribed", False),
+        "transcript_fallible": prov.get("transcript_fallible", True),
+        "event_time_reconstructed": prov.get("event_time_reconstructed", True),
+        "cited": cited,
+        "opinion": opinion,
+        "affirmed": _affirmations(ledger).get(observation_id, 0),
+        "age": g.age_phrase(obs.stamp.event_time),
+    }
+
+
+def curiosities(ledger: Ledger, ground: Optional[TimeGround] = None) -> dict:
+    """The Assumptions & Curiosities board: where the agent knows it's assuming
+    and what it's actively trying to learn — with the staleness rail visible."""
+    from trellis.curiosity import QuestionLog
+    g = _ground(ledger, ground)
+    ql = QuestionLog(ledger, g)
+    stale_ids = {e.id for e in ql.stale()}
+    rows = []
+    for e in ql.open_questions():
+        ak = e.body.get("assumption_key")
+        rows.append({
+            "title": e.body.get("title"),
+            "assumption": e.body.get("assumption"),
+            "what_would_resolve": e.body.get("what_would_resolve"),
+            "owner": e.body.get("owner"),
+            "stale": e.id in stale_ids,
+            "dry_streak": ql.dry_streak(ak) if ak else 0,
+            "reasked": e.body.get("reasked", 0),
+        })
+    rows.sort(key=lambda r: (not r["stale"], -r["dry_streak"]))
+    return {"open": rows, "stale_count": len(stale_ids)}
+
+
+def ingestion_status(ledger: Ledger, ground: Optional[TimeGround] = None) -> dict:
+    """What has been taken in and understood — our ledger as truth, honest about
+    how much rests on machine transcription."""
+    from trellis.sources import Ingestor
+    cov = Ingestor(ledger, _ground(ledger, ground)).coverage()
+    observations = sum(1 for e in ledger.active("decision")
+                       if str(e.author).startswith("observer:"))
+    return {**cov, "observations": observations}
