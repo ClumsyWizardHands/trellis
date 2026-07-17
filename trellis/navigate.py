@@ -63,20 +63,34 @@ class NavHit:
 class ResolvedHeadCache:
     """Materialized view: question_key → the validity-aware HEAD of each
     decision chain (plan §2c). Navigation is the cold/audit path; this is the
-    hot read. Versioned by ledger length — append-only means length is a sound
-    monotonic cache key, so the cache can never serve a stale head."""
+    hot read.
+
+    Cache key = (ledger length, # retirements EFFECTIVE at now). Length alone is
+    NOT sound: `active()`'s validity is time-dependent, so a FUTURE-dated
+    `valid_to` can elapse — moving an entry out of the active set — with no new
+    append to bump the length (the Phase-2 adversary's HIGH). Both terms are
+    monotonic in time, so the tuple changes exactly when the active set can, and
+    the cache can never serve a retired head."""
 
     def __init__(self, log: DecisionLog):
         self.log = log
-        self._n = -1
+        self._version: tuple[int, int] = (-1, -1)
         self._heads: dict[str, Entry] = {}
 
     def _rebuild_if_stale(self) -> None:
-        n = len(self.log.ledger.entries())
-        if n != self._n:
+        entries = self.log.ledger.entries()
+        now = self.log.ledger.ground.now()
+        effective_retirements = 0
+        for e in entries:
+            if e.kind == Ledger.RETIREMENT_KIND:
+                raw = e.body.get("valid_to")
+                if raw and datetime.fromisoformat(raw) <= now:
+                    effective_retirements += 1
+        version = (len(entries), effective_retirements)
+        if version != self._version:
             self._heads = {self.log._qkey_of(e): e
                            for e in self.log.ledger.active(self.log.KIND)}
-            self._n = n
+            self._version = version
 
     def head(self, qkey: str) -> Optional[Entry]:
         self._rebuild_if_stale()

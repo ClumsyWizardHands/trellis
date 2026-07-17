@@ -37,7 +37,14 @@ def question_key(subject: str) -> str:
     head on the same question), then reduced to a hyphenated keyword slug. Two
     decisions with the same question_key answer the same question — and only one
     may be live at once (plan §2b anti-fork)."""
-    folded = fold_text(subject or "")
+    # casefold FIRST so uppercase homoglyphs (e.g. Cyrillic 'О') lower to their
+    # twin BEFORE the confusable table (whose keys are lowercase) runs inside
+    # fold_text — otherwise an uppercase lookalike would dodge the table and open
+    # a second live head (Phase-2 adversary). fold_text then does NFKD +
+    # confusables + strip-invisible. Not adversarially complete against every
+    # exotic glyph (see identity.py's documented limit; the real backstop is
+    # human review of the board) — but the ordinary attack is closed.
+    folded = fold_text((subject or "").casefold())
     return re.sub(r"[^a-z0-9]+", "-", folded).strip("-")
 
 
@@ -199,10 +206,23 @@ class DecisionLog:
         if old is None:
             raise KeyError(f"unknown decision: {decision_id}")
         resolution.parent_id = decision_id
+        body = resolution.to_body()
+        # A resolution ANSWERS THE SAME QUESTION it supersedes. If the resolution
+        # was worded differently its question_key would drift to a new key, and —
+        # worse — could COLLIDE with a *different* already-live head, minting two
+        # live heads on one question with no supersession link between them (the
+        # Phase-2 adversary's confirmed HIGH). Inherit the superseded entry's
+        # question_key so the resolution stays bound to its question and the
+        # anti-fork holds by construction; the reworded subject is still kept
+        # verbatim for readability and lineage.
+        inherited = self._qkey_of(old)
+        if body.get("question_key") != inherited:
+            body = {**body, "question_key": inherited,
+                    "reworded_from": old.body.get("subject")}
         return self.ledger.append(
             kind=self.KIND,
             author=resolution.author,
-            body=resolution.to_body(),
+            body=body,
             tags=("ynt", resolution.verdict.value, resolution.emp_lineage),
             supersedes=old.id,
         )

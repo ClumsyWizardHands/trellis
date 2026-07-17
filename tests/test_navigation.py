@@ -57,6 +57,29 @@ def test_current_and_active_are_the_same_predicate(ledger):
     assert {x.id for x in ledger.current("fact")} == {x.id for x in ledger.active("fact")} == {b.id}
 
 
+def test_no_past_query_returns_two_live_heads(ledger, ground, clock):
+    """Phase-2 adversary CONFIRMED (MED): active(at=<past>) mixed now-global
+    existence with past-validity and returned TWO live heads for one question.
+    active() is now-only; historical reconstruction goes through as_of(), which
+    is bitemporally coherent. Neither path ever shows two live heads."""
+    log = DecisionLog(ledger)
+    a = log.record(_yn("Adopt the policy", Verdict.Y))       # event today
+    ledger.retire(a.id, "alex", valid_to=ground.now() + timedelta(days=2))
+    clock.advance(days=3)                                    # A now retired
+    b = log.record(_yn("Adopt the policy", Verdict.N))       # allowed: A is gone
+    qk = question_key("Adopt the policy")
+    # now: exactly one live head
+    assert len([e for e in ledger.active("decision") if log._qkey_of(e) == qk]) == 1
+    # active() takes no `at` — the incoherent past query is gone
+    import inspect
+    assert "at" not in inspect.signature(ledger.active).parameters
+    # as_of() is coherent: at a past write_time, only what was known then
+    past = ledger.get(a.id).stamp.write_time + timedelta(seconds=1)
+    heads_then = [e for e in ledger.as_of(past) if e.kind == "decision"
+                  and log._qkey_of(e) == qk]
+    assert len(heads_then) == 1 and heads_then[0].id == a.id
+
+
 def test_retirement_is_appended_never_mutates_the_entry(ledger):
     e = ledger.append("fact", "w", {"n": 1})
     before = ledger.get(e.id)
@@ -80,6 +103,21 @@ def test_question_key_is_homoglyph_and_punctuation_stable():
     assert question_key("Memory: on-agent vs beside?") == question_key("memory on agent vs beside")
 
 
+def test_question_key_folds_glyphs_outside_the_original_table(ledger):
+    """Phase-2 adversary CONFIRMED (MED): homoglyphs outside the confusable
+    table (Cyrillic ԝ/ɡ) and UPPERCASE twins (Cyrillic О) dodged folding and
+    opened a second live head. Pre-casefold + a broadened table close the
+    ordinary attack."""
+    assert question_key("wager") == question_key("ԝager")     # Cyrillic ԝ → w
+    assert question_key("go now") == question_key("ɡo now")   # Cyrillic ɡ → g
+    assert question_key("Open the gate") == question_key("Оpen the gate")  # uppercase Cyrillic О
+    # and the guard actually refuses the forked record:
+    log = DecisionLog(ledger)
+    log.record(_yn("Open the API", Verdict.Y))
+    with pytest.raises(CollidingDecisionError):
+        log.record(_yn("Оpen the API", Verdict.N))            # homoglyph 'О'
+
+
 def test_two_live_heads_cannot_answer_one_question_even_unlinked(ledger):
     """The exact stress-test finding: an UNLINKED fresh Y/N (supersedes=None) on
     a settled question used to slip past the anti-fork guard."""
@@ -98,6 +136,26 @@ def test_decide_brand_new_records_but_live_yn_needs_reopen(ledger):
     nav.decide(_yn("Stage-don't-fire the pricing email", Verdict.N))
     with pytest.raises(ReopenRequiredError):
         nav.decide(_yn("Stage-don't-fire the pricing email", Verdict.Y))
+
+
+def test_resolve_cannot_fork_a_different_live_head_by_rewording(ledger, ground):
+    """Phase-2 adversary CONFIRMED: resolving entry B with a resolution whose
+    subject collides with a DIFFERENT active head A used to mint two live heads
+    on one question-key with no supersession link. A resolution must inherit the
+    question it answers."""
+    log = DecisionLog(ledger)
+    a = log.record(_yn("Hire Alice", Verdict.Y))
+    t = _t("Onboard Bob", ground.now() + timedelta(days=7))
+    log.record(t)
+    # resolve the Bob-T with a resolution WORDED like the Alice question:
+    log.resolve(t.id, _yn("Hire Alice", Verdict.N))
+    # the resolution stayed bound to the Bob question — Alice is untouched, and
+    # 'hire-alice' still has exactly ONE live head (A).
+    alice_heads = [e for e in ledger.active("decision")
+                   if log._qkey_of(e) == question_key("Hire Alice")]
+    assert len(alice_heads) == 1 and alice_heads[0].id == a.id
+    bob_head = log.active_head(question_key("Onboard Bob"))
+    assert bob_head is not None and bob_head.body["verdict"] == "N"
 
 
 def test_decide_resolves_a_live_T(ledger, ground):
@@ -183,6 +241,25 @@ def test_cache_tracks_active_head_across_supersession_and_retire(ledger, ground)
     assert nav.cache.head(qk).body["verdict"] == "Y"     # cache rebuilt
     ledger.retire(nav.cache.head(qk).id, "alex")         # retire the head
     assert nav.cache.head(qk) is None                    # never serves a retired head
+
+
+def test_cache_never_serves_a_head_whose_future_valid_to_has_elapsed(ledger, ground, clock):
+    """Phase-2 adversary HIGH: a FUTURE-dated valid_to elapses with NO new
+    append, so a length-only cache key stays stale and serves the retired head
+    (and poisons decide()). The cache must notice validity elapsing in time."""
+    log = DecisionLog(ledger)
+    nav = Navigator(log)
+    d = log.record(_yn("Ship on Friday", Verdict.N))
+    qk = question_key("Ship on Friday")
+    # retire with a valid_to two days out — still active now, correctly cached
+    ledger.retire(d.id, "alex", valid_to=ground.now() + timedelta(days=2))
+    assert nav.cache.head(qk).body["verdict"] == "N"     # still live today
+    clock.advance(days=3)                                 # crosses valid_to; NO append
+    assert log.active_head(qk) is None                   # truly retired now
+    assert nav.cache.head(qk) is None                    # cache agrees — no stale head
+    # and decide() routes correctly to a fresh record instead of ReopenRequired
+    nav.decide(_yn("Ship on Friday", Verdict.Y))
+    assert log.active_head(qk).body["verdict"] == "Y"
 
 
 # ============ 2a — titles: findable, never vague ========================

@@ -29,9 +29,14 @@ _CONFUSABLES = {
     "в": "b", "к": "k", "м": "m", "ѐ": "e", "ё": "e", "ո": "n", "ս": "u",
     # Greek
     "ο": "o", "α": "a", "ρ": "p", "ϲ": "c", "ν": "v", "ι": "i", "κ": "k",
-    "μ": "m", "τ": "t", "υ": "u", "χ": "x", "ε": "e",
+    "μ": "m", "τ": "t", "υ": "u", "χ": "x", "ε": "e", "ϳ": "j",
     # 'l' lookalikes (no NFKD decomposition) — the #17 round-3 gap
     "ӏ": "l", "Ӏ": "l", "ł": "l", "ǀ": "l", "ן": "l", "׀": "l", "Ⲓ": "l",
+    # more Cyrillic Latin-lookalikes with no NFKD form (the Phase-2 adversary's
+    # ԝ/ɡ class — broadens the floor; question_key pre-casefolds so uppercase
+    # twins like 'О' fold here too):
+    "ԝ": "w", "ѡ": "w", "ɡ": "g", "ԛ": "q", "һ": "h", "ѵ": "v", "ԁ": "d",
+    "ѐ": "e", "ѓ": "r", "ԥ": "p", "ѕ": "s", "ѻ": "o", "ꞔ": "c", "ẝ": "s",
 }
 _CONF_TABLE = str.maketrans(_CONFUSABLES)
 

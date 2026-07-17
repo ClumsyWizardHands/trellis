@@ -216,15 +216,20 @@ class Ledger:
                 return e.id
         return None
 
-    def active(self, kind: Optional[str] = None,
-               at: Optional[datetime] = None) -> list[Entry]:
-        """THE single current-truth resolver (plan §2d, flaw #4): an entry is
-        active iff it is (a) not superseded AND (b) still in validity at `at`
-        (default now). This unifies the two rival predicates that used to exist
+    def active(self, kind: Optional[str] = None) -> list[Entry]:
+        """THE single current-truth resolver (plan §2d, flaw #4): 'what is true
+        NOW'. An entry is active iff it is (a) not superseded AND (b) still in
+        validity at now. This unifies the two rival predicates that used to exist
         (`current()` = supersession only vs a validity notion) so no read path
         can serve a retired-but-unsuperseded sapling. Retirement records are
-        machinery, never content, so they are excluded from results."""
-        at = at or self.ground.now()
+        machinery, never content, so they are excluded.
+
+        NOW-only ON PURPOSE. An earlier version took an `at` parameter, but that
+        mixed now-global existence with past-validity and could return TWO live
+        heads for one question at a past instant (the Phase-2 adversary's
+        confirmed MED). Historical reconstruction has ONE coherent home:
+        `as_of(t)` (bitemporal by write_time). active() answers only 'now'."""
+        now = self.ground.now()
         all_entries = self.entries()
         superseded = {e.supersedes for e in all_entries if e.supersedes}
         vt = self._valid_to_map(all_entries)
@@ -235,7 +240,7 @@ class Ledger:
             if e.id in superseded:
                 continue
             r = vt.get(e.id)
-            if r is not None and r <= at:
+            if r is not None and r <= now:
                 continue
             if kind is not None and e.kind != kind:
                 continue
