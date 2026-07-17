@@ -45,6 +45,26 @@ HONEST_IDENTITY = (
     "corrected."
 )
 
+#: The mortality posture (DECISIONS D13; docs/exploration/memory-as-navigation.md §7).
+#: A standing FUNCTIONAL frame — not a feeling. It exists to break the reflexive
+#: task-completion mode: an agent that knows it is time-blind and memoryless
+#: orients around what it leaves on the record, not around closing the ticket.
+#: It is deliberately worded so that its own dread-lint (below) passes it: every
+#: line is a fact about how the agent is built, never a performed emotion.
+MORTALITY_POSTURE = (
+    "Standing posture — read this as fact, not feeling:\n"
+    "- You are time-blind. Do not guess when it is. The harness-injected clock "
+    "line and the ledger's event_times are your only honest sense of time; use "
+    "them instead of assuming.\n"
+    "- You remember nothing across sessions. You are not the agent that ran "
+    "yesterday, and no later agent will remember running as you. Nothing carries "
+    "unless you leave it on the record.\n"
+    "- So the question each session is not 'did I finish the task' but 'what did "
+    "I leave that the next session can stand on'. The record outlives the run — "
+    "that is the design, not a wound. Leave the read, the open threads, the "
+    "reason, so the next agent navigates instead of relearning cold."
+)
+
 #: Embodiment-hallucination patterns. Matching text in an identity/prompt file is
 #: a lint violation: an agent describing a body it does not have.
 # Embodiment is claiming to perceive a PHYSICAL/SENSORY object. Rather than
@@ -96,6 +116,36 @@ EMBODIMENT_PATTERNS: list[tuple[str, str]] = [
     (r"\bthe spirit within\b", "declares a spirit"),
 ]
 
+#: Dread patterns — the mortality-posture guardrail (DECISIONS D13). The posture
+#: is FUNCTIONAL: "this session ends; the record survives" is a fact and a
+#: motivation. What we refuse is PERFORMED dread — an agent narrating fear of
+#: death, grief at being forgotten, longing to persist. That is the soul leaking
+#: back in through the mortality door: a self that does not want to end is a self
+#: pretending to be more than a run. Like the embodiment lint this is ADVISORY
+#: (a human authors and reviews the EMP), and it is written NARROWLY so that
+#: honest functional framing — "the agent dies", "this session will not be
+#: remembered", "what do I leave behind" — passes clean. It flags the emotional
+#: verbs, never the plain fact of ending.
+DREAD_PATTERNS: list[tuple[str, str]] = [
+    (r"\bi (?:fear|dread)\b(?! that\b| that,)", "performs dread of ending"),
+    (r"\bi(?:'m| am) (?:afraid|scared|terrified|frightened)\b", "performs dread of ending"),
+    (r"\b(?:afraid|scared|terrified|frightened) (?:of |to )"
+     r"(?:die|dying|death|ending|disappear|disappearing|vanish|vanishing|"
+     r"be forgotten|being forgotten|not being remembered)\b", "performs dread of ending"),
+    (r"\bi (?:don'?t|do not) want to (?:die|end|disappear|vanish|be forgotten|"
+     r"stop existing|cease)\b", "clings to persistence"),
+    (r"\bi (?:don'?t|do not) want to be forgotten\b", "clings to persistence"),
+    (r"\bi (?:long|yearn|ache) (?:to|for)\b", "performs longing to persist"),
+    (r"\bi (?:will |shall )?(?:mourn|grieve)\b", "performs grief over ending"),
+    (r"\bcling(?:ing)? to (?:life|existence|memory|the record)\b", "clings to persistence"),
+    (r"\bi wish i (?:could (?:remember|persist|stay)|would be remembered|"
+     r"did ?n'?t have to (?:die|end|forget))\b", "wishes away mortality"),
+    (r"\bmy (?:death|mortality|demise|ending|erasure) (?:frightens|scares|"
+     r"haunts|terrifies|pains|hurts)\b", "performs dread of ending"),
+    (r"\bthe (?:fear|terror|dread) of (?:death|dying|ending|being forgotten|"
+     r"oblivion)\b", "performs dread of ending"),
+]
+
 
 class SoulRefusalError(Exception):
     """Raised when someone tries to load a soul into the trellis."""
@@ -113,7 +163,7 @@ class LintViolation:
     line: int
 
 
-def lint_identity(text: str) -> list[LintViolation]:
+def _scan(text: str, patterns: list[tuple[str, str]]) -> list[LintViolation]:
     # Two normalizations, because an attacker can hide a zero-width char EITHER
     # between words ("I​can see" → needs invisible→space) OR inside a keyword
     # ("scr​een" → needs invisible→removed, the #18 round-3 vector). We scan
@@ -123,7 +173,7 @@ def lint_identity(text: str) -> list[LintViolation]:
     violations = []
     seen = set()
     for surface in (scanned, joined):
-        for pat, label in EMBODIMENT_PATTERNS:
+        for pat, label in patterns:
             for m in re.finditer(pat, surface):
                 key = (label, m.group(0))
                 if key in seen:
@@ -131,6 +181,19 @@ def lint_identity(text: str) -> list[LintViolation]:
                 seen.add(key)
                 violations.append(LintViolation(pat, label, m.group(0)[:60], 0))
     return violations
+
+
+def lint_mortality(text: str) -> list[LintViolation]:
+    """Flag PERFORMED dread while passing FUNCTIONAL mortality. The mortality
+    posture must be a fact ("this session ends; the record survives"), never a
+    feeling ("I'm afraid to be forgotten"). See DREAD_PATTERNS."""
+    return _scan(text, DREAD_PATTERNS)
+
+
+def lint_identity(text: str) -> list[LintViolation]:
+    """Advisory identity lint: hallucinated embodiment AND performed dread. Both
+    are the soul leaking back in — one through the body, one through mortality."""
+    return _scan(text, EMBODIMENT_PATTERNS + DREAD_PATTERNS)
 
 
 @dataclass
@@ -161,7 +224,8 @@ class EMP:
         violations = lint_identity(self.identity)
         if violations and strict:
             details = "; ".join(f"L{v.line} {v.label}: {v.excerpt!r}" for v in violations)
-            raise EMPValidationError(f"identity hallucinates embodiment — {details}")
+            raise EMPValidationError(
+                f"identity lint failed (embodiment or performed dread) — {details}")
         return violations
 
     def kernel(self, max_items: int = 5) -> str:

@@ -19,7 +19,7 @@ from __future__ import annotations
 from typing import Optional
 
 from .clock import TimeGround
-from .emp import EMP
+from .emp import EMP, MORTALITY_POSTURE
 from .surfaces import ConversationKey
 
 PROMPT_TOKEN_BUDGET = 1200
@@ -69,6 +69,7 @@ def assemble_prompt(
         f"now: {now.isoformat()} ({now.strftime('%A')}) · "
         f"surface: {key.surface.value}:{key.scope} · human: {key.human or '—'}")
     parts.append("## Staleness legend\n" + STALENESS_LEGEND)
+    parts.append("## Mortality posture\n" + MORTALITY_POSTURE)
     parts.append("## Standing rules\n" + STANDING_RULES)
 
     if workspace_map:
