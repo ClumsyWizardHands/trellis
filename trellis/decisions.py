@@ -19,6 +19,7 @@ about April made in July never masquerades as an April decision.
 
 from __future__ import annotations
 
+import re
 import uuid
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -26,8 +27,18 @@ from enum import Enum
 from typing import Optional
 
 from .clock import TimeGround
-from .identity import is_effectively_blank
+from .identity import fold_text, is_effectively_blank
 from .ledger import Ledger, Entry
+
+
+def question_key(subject: str) -> str:
+    """The stable identity of the QUESTION a decision answers. Homoglyph- and
+    case-folded (so a Cyrillic-'o' twin of a subject cannot open a second live
+    head on the same question), then reduced to a hyphenated keyword slug. Two
+    decisions with the same question_key answer the same question — and only one
+    may be live at once (plan §2b anti-fork)."""
+    folded = fold_text(subject or "")
+    return re.sub(r"[^a-z0-9]+", "-", folded).strip("-")
 
 
 class Verdict(str, Enum):
@@ -39,6 +50,13 @@ class Verdict(str, Enum):
 class IncompleteTriangulationError(Exception):
     """A T without ≥3 named POVs + owner + revisit time is a 'maybe' wearing
     a costume. Refused at creation."""
+
+
+class CollidingDecisionError(Exception):
+    """Two live decisions cannot answer the same question. A fresh Y/N minted on
+    a question that already has a live decision is the silent re-decide the crux
+    forbids — route it through reopen()/resolve() so the flip is ON THE RECORD
+    with lineage (plan §2b, flaw #1)."""
 
 
 @dataclass(frozen=True)
@@ -112,6 +130,7 @@ class Decision:
         return {
             "decision_id": self.id,
             "subject": self.subject,
+            "question_key": question_key(self.subject),
             "verdict": self.verdict.value,
             "rationale": self.rationale,
             "emp_lineage": self.emp_lineage,
@@ -135,8 +154,36 @@ class DecisionLog:
         self.ledger = ledger
         self.ground = ground or ledger.ground
 
+    def _qkey_of(self, e: Entry) -> str:
+        """The question-key of a stored decision, computed defensively for
+        entries written before question_key existed."""
+        return e.body.get("question_key") or question_key(e.body.get("subject", ""))
+
+    def active_head(self, qkey: str) -> Optional[Entry]:
+        """The single live decision answering a question, or None. Routed through
+        the validity-aware resolver (plan §2c/2d), so a retired or superseded
+        decision is never returned as the head."""
+        for e in self.ledger.active(self.KIND):
+            if self._qkey_of(e) == qkey:
+                return e
+        return None
+
     def record(self, decision: Decision,
                event_time: Optional[datetime] = None) -> Entry:
+        # Anti-fork on QUESTION-KEY (flaw #1): the ledger's supersession guard
+        # only fires when `supersedes is not None`, so an unlinked fresh Y/N on a
+        # settled question would slip through as a second live head. record() is
+        # the brand-new-decision path; it refuses a collision outright. Changing
+        # a live answer must go through resolve() (which supersedes, with
+        # lineage) — reachable via Navigator.reopen()+resolve or decide().
+        qk = question_key(decision.subject)
+        clash = self.active_head(qk)
+        if clash is not None:
+            raise CollidingDecisionError(
+                f"a live decision already answers {decision.subject!r} "
+                f"(verdict {clash.body.get('verdict')}, id "
+                f"{clash.body.get('decision_id')}). Reopen and resolve it — do "
+                "not mint a second live head (that is a silent re-decide).")
         return self.ledger.append(
             kind=self.KIND,
             author=decision.author,
@@ -160,6 +207,30 @@ class DecisionLog:
             supersedes=old.id,
         )
 
+    REOPEN_KIND = "reopen"
+
+    def reopen(self, decision_id: str, trigger: str, author: str,
+               event_time: Optional[datetime] = None) -> Entry:
+        """Re-surface a settled decision because something changed — WITHOUT
+        re-deciding it (plan §2b, flaw #2). A real T needs ≥3 POVs + owner +
+        revisit + missing, which a bare trigger cannot supply, so reopen does
+        NOT mint a T; it appends a lightweight reopen-marker that makes the node
+        show up as needing re-triangulation. A later step assembles the full T
+        payload (via resolve) to promote it. The decision itself is untouched —
+        divergence RECORDS, it never silently flips."""
+        head = self._entry_for(decision_id)
+        if head is None:
+            raise KeyError(f"unknown or inactive decision: {decision_id}")
+        if is_effectively_blank(trigger):
+            raise ValueError("reopen needs a trigger — why is this live again?")
+        qk = self._qkey_of(head)
+        return self.ledger.append(
+            kind=self.REOPEN_KIND, author=author,
+            body={"reopens": decision_id, "question_key": qk,
+                  "subject": head.body.get("subject"), "trigger": trigger},
+            event_time=event_time, tags=("reopen", qk),
+        )
+
     def hidden_nos(self) -> list[Entry]:
         """Ts past their revisit time. 'An unresolved T is a hidden no' — this
         query is how the harness makes that visible instead of letting maybes
@@ -171,6 +242,38 @@ class DecisionLog:
                 continue
             r = e.body.get("revisit_at")
             if r and datetime.fromisoformat(r) < now:
+                out.append(e)
+        return out
+
+    def reopened(self) -> list[Entry]:
+        """Active decision heads carrying an OPEN reopen-marker: a question a
+        trigger re-surfaced that has not yet been re-triangulated or resolved.
+        A marker is open iff the active head is still the EXACT decision it
+        reopened — a resolve() supersedes that decision with a new one (new
+        decision_id), which closes the marker. Identity, not timestamps, so a
+        frozen or coarse clock can't make a resolved head look unresolved."""
+        out, seen = [], set()
+        for m in self.ledger.entries():
+            if m.kind != self.REOPEN_KIND:
+                continue
+            qk = m.body.get("question_key")
+            reopened_id = m.body.get("reopens")
+            head = self.active_head(qk) if qk else None
+            if head is None or qk in seen:
+                continue
+            if head.body.get("decision_id") == reopened_id:
+                seen.add(qk)
+                out.append(head)
+        return out
+
+    def open_questions(self) -> list[Entry]:
+        """The single attention rail: unresolved Ts past revisit (hidden nos)
+        AND reopened heads — everything the harness should surface 'before
+        anything else'. Deduped by entry id."""
+        out, seen = [], set()
+        for e in self.hidden_nos() + self.reopened():
+            if e.id not in seen:
+                seen.add(e.id)
                 out.append(e)
         return out
 

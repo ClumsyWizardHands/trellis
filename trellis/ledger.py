@@ -150,6 +150,45 @@ class Ledger:
             tags=old.tags, supersedes=old_id,
         )
 
+    RETIREMENT_KIND = "retirement"
+
+    def retire(self, entry_id: str, author: str,
+               valid_to: Optional[datetime] = None, reason: str = "",
+               event_time: Optional[datetime] = None) -> Entry:
+        """Forget without deleting or superseding: append a retirement record
+        that closes an entry's validity at `valid_to` (default now). The Entry
+        itself is NEVER mutated — the record is append-only. A retired-but-
+        unsuperseded entry drops out of `active()` (and therefore every truth-
+        serving read), but stays fully in `lineage()` / `as_of()` for audit.
+        This is `valid_to` as an appended fact (plan §2d)."""
+        target = self.get(entry_id)
+        if target is None:
+            raise LedgerIntegrityError(f"cannot retire unknown entry: {entry_id}")
+        vt = valid_to or self.ground.now()
+        return self.append(
+            kind=self.RETIREMENT_KIND, author=author,
+            body={"retires": entry_id, "valid_to": vt.isoformat(), "reason": reason},
+            event_time=event_time, tags=("retirement",),
+        )
+
+    @staticmethod
+    def _valid_to_map(entries: list[Entry]) -> dict[str, datetime]:
+        """entry_id → earliest valid_to across retirement records targeting it
+        (earliest wins: the first close of validity is when it stopped being
+        current)."""
+        m: dict[str, datetime] = {}
+        for e in entries:
+            if e.kind != Ledger.RETIREMENT_KIND:
+                continue
+            tid = e.body.get("retires")
+            raw = e.body.get("valid_to")
+            if not tid or not raw:
+                continue
+            dt = datetime.fromisoformat(raw)
+            if tid not in m or dt < m[tid]:
+                m[tid] = dt
+        return m
+
     # ----- read ------------------------------------------------------------
 
     def entries(self) -> list[Entry]:
@@ -177,12 +216,37 @@ class Ledger:
                 return e.id
         return None
 
-    def current(self, kind: Optional[str] = None) -> list[Entry]:
-        """Entries that have not been superseded — 'what do we believe now'."""
+    def active(self, kind: Optional[str] = None,
+               at: Optional[datetime] = None) -> list[Entry]:
+        """THE single current-truth resolver (plan §2d, flaw #4): an entry is
+        active iff it is (a) not superseded AND (b) still in validity at `at`
+        (default now). This unifies the two rival predicates that used to exist
+        (`current()` = supersession only vs a validity notion) so no read path
+        can serve a retired-but-unsuperseded sapling. Retirement records are
+        machinery, never content, so they are excluded from results."""
+        at = at or self.ground.now()
         all_entries = self.entries()
         superseded = {e.supersedes for e in all_entries if e.supersedes}
-        return [e for e in all_entries
-                if e.id not in superseded and (kind is None or e.kind == kind)]
+        vt = self._valid_to_map(all_entries)
+        out = []
+        for e in all_entries:
+            if e.kind == self.RETIREMENT_KIND:
+                continue
+            if e.id in superseded:
+                continue
+            r = vt.get(e.id)
+            if r is not None and r <= at:
+                continue
+            if kind is not None and e.kind != kind:
+                continue
+            out.append(e)
+        return out
+
+    def current(self, kind: Optional[str] = None) -> list[Entry]:
+        """'What do we believe now' — kept as the familiar name, now routed
+        through the one validity-aware resolver so it and `active()` can never
+        disagree (they are the same predicate)."""
+        return self.active(kind)
 
     def lineage(self, entry_id: str) -> list[Entry]:
         """Full correction chain containing entry_id, oldest first."""
@@ -211,7 +275,18 @@ class Ledger:
         agent have believed then? This is the anti-gaslighting query."""
         known = [e for e in self.entries() if e.stamp.write_time <= t]
         superseded = {e.supersedes for e in known if e.supersedes}
-        return [e for e in known if e.id not in superseded]
+        vt = self._valid_to_map(known)   # only retirements KNOWN by t count
+        out = []
+        for e in known:
+            if e.kind == self.RETIREMENT_KIND:
+                continue
+            if e.id in superseded:
+                continue
+            r = vt.get(e.id)
+            if r is not None and r <= t:
+                continue
+            out.append(e)
+        return out
 
     # ----- search (index never drifts: rebuilt per query) -------------------
 

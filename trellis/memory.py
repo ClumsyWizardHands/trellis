@@ -39,6 +39,39 @@ class CompactionOrderError(Exception):
     """Compaction attempted before the memory flush."""
 
 
+class TitleError(Exception):
+    """A persisted memory needs a 00-grade, keyword-findable title. Vague or
+    empty titles make the memory un-navigable — search-by-title is the whole
+    index (plan §2a)."""
+
+
+_VAGUE_TITLES = {
+    "notes", "note", "misc", "todo", "memory", "stuff", "things", "untitled",
+    "temp", "tmp", "doc", "document", "draft", "wip", "new", "file", "data",
+    "info", "stuff", "misc notes", "no title", "none", "n/a", "na",
+}
+
+
+def _fails_title(title: str) -> Optional[str]:
+    """A HEURISTIC title lint (sibling of the synthesis test): catch the lazy
+    'notes.md' so the memory stays findable. Not a proof — a human reviews the
+    ledger. Applied when a title is given explicitly; a derived title (legacy
+    headingless content) is tolerated so old writes keep working."""
+    from .identity import is_effectively_blank
+    t = (title or "").strip()
+    if is_effectively_blank(t):
+        return "a persisted memory needs a non-empty title to be findable"
+    stripped = re.sub(r"^#+\s*", "", t).strip()   # allow a markdown heading
+    key = stripped.lower().strip(" .-_")
+    if key in _VAGUE_TITLES:
+        return (f"title {title!r} is too vague to navigate to — name the actual "
+                "subject (search-by-title is the memory index)")
+    words = [w for w in re.findall(r"\w+", stripped) if len(w) >= 2]
+    if not words:
+        return "title has no keyword-findable words — name the subject plainly"
+    return None
+
+
 _BOILERPLATE = {
     "important", "context", "for later", "might need", "just in case",
     "n/a", "na", "none", "misc", "notes", "memory", "todo",
@@ -107,27 +140,98 @@ class Workspace:
 
     # ----- the write gate ---------------------------------------------------
 
+    MEMORY_KIND = "memory_write"
+
+    def _derive_title(self, content: str) -> str:
+        for line in content.splitlines():
+            if line.strip():
+                return line.strip()[:80]
+        return "(empty)"
+
+    def _active_write_for(self, rel: str) -> Optional["object"]:
+        """The active (validity + supersession aware) memory_write entry for a
+        path, or None — the fold-not-clobber lookup."""
+        for e in self.ledger.active(self.MEMORY_KIND):
+            if e.body.get("path") == rel:
+                return e
+        return None
+
     def write(self, rel_path: str, content: str, author: str,
-              synthesis_justification: str) -> WriteReceipt:
+              synthesis_justification: str,
+              title: Optional[str] = None) -> WriteReceipt:
         problem = _fails_synthesis(synthesis_justification)
         if problem:
             raise SynthesisTestError(problem)
+        # 2a — every persisted memory carries a 00-grade title. An explicit
+        # title is linted; a derived one (legacy headingless content) is
+        # tolerated so old callers keep working.
+        if title is not None:
+            tproblem = _fails_title(title)
+            if tproblem:
+                raise TitleError(tproblem)
+            the_title = title.strip()
+        else:
+            the_title = self._derive_title(content)
         path = (self.root / rel_path).resolve()
         if self.root.resolve() not in path.parents and path != self.root.resolve():
             raise ValueError(f"write escapes workspace: {rel_path}")
+        rel = str(path.relative_to(self.root))
         path.parent.mkdir(parents=True, exist_ok=True)
+
+        # 2e — FOLD, don't clobber. If this path already holds an active write,
+        # archive the old body to .history and supersede the prior ledger entry,
+        # so the overwritten content is never lost (exploration §3.5 bug).
+        prior = self._active_write_for(rel)
+        history_ref = None
+        if prior is not None and path.exists():
+            old = path.read_text(encoding="utf-8")
+            stamp = prior.stamp.write_time.isoformat().replace(":", "-")
+            hist = self.root / ".history" / (rel + f".{stamp}")
+            hist.parent.mkdir(parents=True, exist_ok=True)
+            hist.write_text(old, encoding="utf-8")
+            history_ref = str(hist.relative_to(self.root))
+
         path.write_text(content, encoding="utf-8")
         entry = self.ledger.append(
-            kind="memory_write", author=author,
-            body={"path": str(path.relative_to(self.root)),
+            kind=self.MEMORY_KIND, author=author,
+            body={"path": rel,
+                  "title": the_title,
                   "bytes": len(content.encode("utf-8")),
-                  "synthesis_justification": synthesis_justification},
+                  "synthesis_justification": synthesis_justification,
+                  "prior_history": history_ref},
             tags=("memory",),
+            supersedes=prior.id if prior is not None else None,
         )
         return WriteReceipt(str(path), entry.id, synthesis_justification)
 
     def read(self, rel_path: str) -> str:
         return (self.root / rel_path).read_text(encoding="utf-8")
+
+    # ----- 2a: search by title (navigate; open bodies on demand) -------------
+
+    def titles(self) -> list[tuple[str, str]]:
+        """(title, path) for every ACTIVE memory — the navigable index. Reads
+        the ledger (validity-aware), not the disk, so retired/superseded writes
+        never appear."""
+        return [(e.body.get("title", ""), e.body.get("path", ""))
+                for e in self.ledger.active(self.MEMORY_KIND)]
+
+    def search_titles(self, keywords: str) -> list[tuple[str, str]]:
+        """Search TITLES only (the map), not bodies (the territory). Returns
+        (title, path) hits ranked by how many query words the title matches;
+        the caller opens a body with read(path) on a match. This is 'memory is
+        navigation': you find the door by its label, then walk through it."""
+        want = [w for w in re.findall(r"\w+", keywords.lower()) if w]
+        if not want:
+            return []
+        scored = []
+        for title, path in self.titles():
+            hay = title.lower()
+            hits = sum(1 for w in want if w in hay)
+            if hits:
+                scored.append((hits, title, path))
+        scored.sort(key=lambda s: (-s[0], s[1]))
+        return [(t, p) for _, t, p in scored]
 
     def map(self) -> list[str]:
         """Titles-only map for prompt injection — the navigational cold layer.

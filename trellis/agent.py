@@ -176,7 +176,7 @@ class Witness:
             workspace_map=self.workspace.map(),
             loop_health=self.loops.health_report(),
             waiting_passes=len(self.exchange.inbox(self.id)) if self.exchange else 0,
-            hidden_nos=len(self.decisions.hidden_nos()),
+            hidden_nos=len(self.decisions.open_questions()),
         )
         user = ("Events on your surface (age-tagged; newer supersedes older):\n"
                 + "\n".join(sensed) + "\n\n" + OPINION_INSTRUCTIONS)

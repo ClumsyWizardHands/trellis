@@ -17,14 +17,17 @@ __version__ = "0.1.0"
 from .clock import TimeGround, Staleness
 from .ledger import Ledger, Entry
 from .emp import EMP, load_emp, SoulRefusalError, lint_identity
-from .decisions import Decision, Verdict, POV, IncompleteTriangulationError
+from .decisions import (Decision, Verdict, POV, IncompleteTriangulationError,
+                        DecisionLog, CollidingDecisionError, question_key)
+from .navigate import (Navigator, Walk, NavHit, ResolvedHeadCache,
+                       ReopenRequiredError)
 from .surfaces import Surface, ConversationKey, PrivacyBoundaryError
 from .passes import Pass, PassStatus, TurdDropError, PassExchange
 from .loops import LoopSpec, LoopRun, Outcome, LoopRegistry, LoopBudgetExceeded
 from .verify import CompletionClaim, Evidence, Verdict as VerifyVerdict  # noqa: F401
 from .verify import RuleVerifier, SelfCertificationError
 from .stage import Outbox, StagedAction, ActionStatus, UnapprovedFireError
-from .memory import Workspace, SynthesisTestError
+from .memory import Workspace, SynthesisTestError, TitleError
 from .prompt import assemble_prompt, PromptBudgetExceeded
 from .panel import VerifierPanel, PanelVerdict, panel_as_subagent_specs
 from .ingest import (DiscordMessage, CalendarEvent, ingest_discord, ingest_calendar,
@@ -35,6 +38,9 @@ __all__ = [
     "Ledger", "Entry",
     "EMP", "load_emp", "SoulRefusalError", "lint_identity",
     "Decision", "Verdict", "POV", "IncompleteTriangulationError",
+    "DecisionLog", "CollidingDecisionError", "question_key",
+    "Navigator", "Walk", "NavHit", "ResolvedHeadCache", "ReopenRequiredError",
+    "Workspace", "TitleError",
     "Surface", "ConversationKey", "PrivacyBoundaryError",
     "Pass", "PassStatus", "TurdDropError", "PassExchange",
     "LoopSpec", "LoopRun", "Outcome", "LoopRegistry", "LoopBudgetExceeded",

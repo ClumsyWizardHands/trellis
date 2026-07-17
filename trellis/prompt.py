@@ -87,8 +87,8 @@ def assemble_prompt(
     if waiting_passes:
         status_bits.append(f"passes waiting for you: {waiting_passes}")
     if hidden_nos:
-        status_bits.append(f"HIDDEN NOS (unresolved Ts past revisit): {hidden_nos} — "
-                           "surface these before anything else")
+        status_bits.append(f"OPEN QUESTIONS (unresolved Ts past revisit + reopened "
+                           f"decisions): {hidden_nos} — surface these before anything else")
     if status_bits:
         parts.append("## Status rail\n" + " · ".join(status_bits))
 
