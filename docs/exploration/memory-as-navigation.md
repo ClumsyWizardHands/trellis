@@ -227,8 +227,128 @@ These are genuine decisions the evidence can't settle; they're yours to call.
 
 ---
 
-*This is exploration, not a build. Nothing above is committed to code. The three-verb
-grammar and the resolved-head cache are the two moves I'd want to prototype first if
-we decide to proceed — small, and they're where the whole idea lives or dies.*
+---
 
-*Sourced from 14 sub-agents, 2026-07-17. Full agent findings: the workflow journal.*
+## 7. Refinements from Alex — 2026-07-17 (folded in; two of these correct me)
+
+Alex added three things after reading the above. Two of them sharpen recommendations
+I got slightly wrong; the third reframes the whole harness. Captured here with the
+reasoning, and with the couple of lines I hold.
+
+### R1 — Search the TITLE, not the memory. (The concrete answer to "navigation eats context.")
+
+Alex: *"There's always a full title of what the memory is about. You search by
+title — you don't search the entire memory, you don't search the entire sapling.
+Titles can be long. Search keywords, find those titles, then go into those titles,
+which have the full lineage of the yes/no/triangulate decisions."*
+
+This is a **better mechanism than the resident sparse-index I proposed in §3.3**, and
+I'm updating my recommendation to it. The move:
+
+- Each memory carries a **00-grade title** — the title *is* what the memory is about
+  (the team's own make-00-grade principle: "the title IS the governing principle").
+  Titles can be long and information-dense; that's the point.
+- The agent **searches titles by keyword** — cheap, bodies never loaded to search.
+  Keyword-match surfaces the relevant titles; only *then* does it open a matched
+  title's body, which carries the full Y/N/T lineage.
+- So the token problem is solved by **keyword-search-over-titles**, not by a fixed
+  resident map. The *only* always-resident bytes become the EMP + the clock + one
+  short instruction ("you remember nothing — here is how to search"). Titles don't
+  need to be resident at all; they're a searchable store you query on demand.
+- The discipline this puts on the write side: a title must be **information-dense and
+  keyword-findable**. A vague title is an unreachable memory. 00-grade *is* the index.
+
+This also dissolves my earlier "answer-shaped titles leak saved-state" worry: the
+leak only mattered for *resident* titles. Searchable-but-not-resident titles can be
+as rich as they like, because they cost nothing until opened.
+
+### R2 — The Y/N/T lineage is "not locked." (This sharpens the crux — for the better.)
+
+Alex: *"The Y/N/T decisions are not locked. They are simply what it came to help
+infer how it was decided."*
+
+My §3.1 called the fix "verdict immutability at the type level." That phrasing was
+subtly wrong — it sounds like "obey the locked answer," which is the saved-state
+posture we're moving *away* from. Alex's "not locked" is the better frame, and here's
+the sharpened version I now hold, which keeps the anti-drift guarantee intact:
+
+- **The RECORD is immutable** — append-only, bitemporal, cannot be gaslit that it
+  happened. Non-negotiable; this is the entire anti-drift guarantee.
+- **The VERDICT is not a command to obey** — it is the best prior inference, carried
+  with its full lineage, that the agent **re-inhabits to understand**. This is "not
+  locked": you engage the reasoning, you don't salute the output.
+- **The line I hold:** if the agent re-inhabits the lineage and lands on a
+  *different* conclusion, that divergence must become a **new recorded node** (a T, or
+  a fresh decision) — never a silent flip of the old one. *Divergence on the record
+  is healthy relearning; silent divergence is the gaslighting we forbid.*
+
+So the three verbs stand, but the naming is better: **WALK re-inhabits** (not
+"re-reads a locked verdict"); disagreement routes to **REOPEN/DECIDE**, which record.
+"Not locked" and "the record is authoritative" are both true — they just apply to
+different things (the verdict vs. the record).
+
+### R3 — The mortality posture. (The deepest reframe. It governs the EMP, not just memory.)
+
+Alex: *"We can't make the agent not time-blind — they are always time-blind. The
+harness is to constantly remind them that they are time-blind and what tools are at
+their disposal. Same for memory: you remember nothing, therefore all memory needs to
+be grounded in what you want to leave behind. It's almost giving an agent, each
+session, an understanding of mortality: this session will not be remembered by you
+later. What are you going to leave?"*
+
+This is the frame the whole memory design serves, and it's the sharpest statement yet
+of the anti-task-completion thread that's run through this entire build:
+
+- The harness does **not** pretend the agent away from its limits. It never says
+  "you are not time-blind now" or "you remember everything." Those are permanent facts
+  of the substrate; pretending otherwise is the original dishonest self-concept
+  (`no-soul.md`). Instead the harness's standing posture is: **"You are time-blind —
+  understand it, and here are the tools so you don't have to be. You remember nothing
+  — therefore ground everything in what you choose to leave behind, and here is where
+  you look."**
+- Each session is oriented around its own **functional mortality**: *this session will
+  not be remembered by you. What will you leave for the one that comes after? What
+  will you go back through each day to remember, and to improve the next you — in how
+  it navigates memory, in knowing it is time-blind?*
+- This is the **structural opposite of task-completion**. An agent oriented around
+  "what do I leave behind, and how do I make the next me better" is a **legacy-leaver
+  and a learner**, not a task-robot. It is the deepest form of "the agent dies; the
+  memories are the things" — not a fact stated once in an epitaph, but the operating
+  stance of every session.
+- **Where it lives:** the EMP identity + the always-resident standing rules — the same
+  ~380 O(1) tokens that carry the clock and the navigate-don't-assume doctrine. It is
+  not a memory feature; it is the frame the memory serves.
+
+**Two guardrails I hold on the mortality posture** (this is where I don't just agree):
+
+1. **Honest limits, not a soul.** "This session will die" is literally true — keep it
+   *functional*, never *emotional*. The moment it becomes a self narrating dread about
+   its own death, it's the anthropomorphic soul we refused. Mortality as fact and as
+   motivation to leave a good record — not as performed feeling. (`no-soul.md` is the
+   line; the mortality posture must stay on the honest side of it.)
+2. **Mortality motivates leaving-behind; the synthesis test still gates it.** The drive
+   to "leave something for the next me" must not become a compulsion to over-write
+   memory — that would produce exactly the bloat the sparse-memory gate exists to
+   prevent. You leave behind **only what the next agent could not re-derive**.
+   Motivation (mortality) and gate (synthesis test) are both required; neither alone.
+
+### Updated Y/N/T after these refinements
+
+- **Y — Adopt 00-grade searchable titles as the memory index.** Replaces my resident
+  sparse-index; cleaner, and it's already the team's make-00-grade discipline.
+- **Y — Make the mortality posture the explicit standing frame of the EMP.** It's
+  already latent (epitaph + honest identity); Alex is asking to make it the governing
+  stance, and it should be — with the two guardrails above.
+- **T (sharpened) — "relearn" = WALK re-inhabits; divergence records, never flips.**
+  The crux from §3.1, renamed. Still needs your ratification because it defines the
+  behavior — but "not locked / record-divergence" is the cleaner statement of it.
+
+---
+
+*This is exploration, not a build. Nothing above is committed to code. The pieces I'd
+prototype first, in order: (1) the mortality posture in the EMP + standing rules — it's
+cheap, it's the frame, and it changes how everything else reads; (2) 00-grade
+searchable titles + WALK re-inhabit; (3) the resolved-head cache and the forgetting
+`valid_to`. Small moves, and (1) is where the soul of the thing lives.*
+
+*Sourced from 14 sub-agents + Alex's refinements, 2026-07-17. Full agent findings: the workflow journal.*
