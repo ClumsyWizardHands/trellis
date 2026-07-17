@@ -30,6 +30,7 @@ from typing import Optional
 from .clock import TimeGround
 from .decisions import DecisionLog
 from .emp import lint_mortality
+from .identity import same_identity
 from .ledger import Entry, Ledger
 from .loops import LoopSpec
 from .memory import _fails_synthesis
@@ -199,18 +200,29 @@ class ReflectionRitual:
     def _verify_self_change(self, change: SelfChange, now: datetime) -> dict:
         """Build a completion claim for the proposed change and run it past the
         independent verifier. The proposal is recorded either way; `verified` is
-        the gate on whether it may take effect."""
-        evidence = [Evidence(EvidenceKind.LEDGER, eid) for eid in change.evidence_ids] \
-            or [Evidence(EvidenceKind.OUTPUT, change.rationale)]
+        the gate on whether it may take effect.
+
+        A self-change MUST be grounded in openable LEDGER evidence. Earlier this
+        fell back to maker-authored OUTPUT evidence (the rationale text) when
+        `evidence_ids` was empty — but OUTPUT evidence only checks non-emptiness,
+        so an ungrounded change would 'verify' on its own words (the Phase-2.6
+        adversary's HIGH). No openable evidence → the proposal is recorded but
+        stays unverified and cannot take effect."""
+        record = {"target": change.target, "proposal": change.proposal,
+                  "rationale": change.rationale,
+                  "evidence_ids": list(change.evidence_ids),
+                  "verified": False, "verdict": None, "claim_id": None}
+        if not change.evidence_ids:
+            record["verdict"] = "insufficient"
+            record["note"] = ("no openable evidence — a self-change must cite real "
+                              "ledger entries an independent verifier can inspect")
+            return record
         claim = CompletionClaim(
             maker=self.author,
             task=f"self-change proposal: {change.target}",
             summary=f"{change.proposal} — {change.rationale}",
-            evidence=evidence)
-        record = {"target": change.target, "proposal": change.proposal,
-                  "rationale": change.rationale,
-                  "evidence_ids": list(change.evidence_ids),
-                  "verified": False, "verdict": None, "claim_id": claim.id}
+            evidence=[Evidence(EvidenceKind.LEDGER, eid) for eid in change.evidence_ids])
+        record["claim_id"] = claim.id
         if self.verifier is not None:
             verdict = self.verifier.verify(claim)          # raises if maker==verifier
             record_verdict(self.ledger, claim, verdict)
@@ -219,18 +231,38 @@ class ReflectionRitual:
         return record
 
     def apply_self_change(self, reflection_entry_id: str) -> dict:
-        """A self-change may take effect ONLY if its recorded verdict is
-        verified. Otherwise refuse — an unverified self-change taking effect is
-        the harness self-certifying, which it must never do."""
+        """A self-change may take effect ONLY if the LEDGER carries an independent
+        verified verdict for its claim. Otherwise refuse — an unverified self-
+        change taking effect is the harness self-certifying, which it must never
+        do.
+
+        We RE-DERIVE trust from the append-only record rather than trusting the
+        reflection body's self-reported `verified` flag (the Phase-2.6 adversary's
+        MED): a hand-crafted reflection_log claiming verified=True must still
+        produce a real `verification` entry, by a party who is not the maker, to
+        take effect. The record is the authority, not the claim about it."""
         e = self.ledger.get(reflection_entry_id)
         if e is None or e.kind != REFLECTION_KIND:
             raise KeyError(f"no reflection_log entry {reflection_entry_id}")
         change = e.body.get("self_change")
         if not change:
             raise KeyError("this reflection proposed no self-change")
-        if not change.get("verified"):
+        maker = e.author
+        claim_id = change.get("claim_id")
+        # find an INDEPENDENT verified verdict for this exact claim in the ledger
+        independent_ok = False
+        if claim_id:
+            for v in self.ledger.entries():
+                if (v.kind == "verification"
+                        and v.body.get("claim_id") == claim_id
+                        and v.body.get("status") == "verified"
+                        and not same_identity(v.author, maker)):
+                    independent_ok = True
+                    break
+        if not independent_ok:
             raise UnverifiedSelfChangeError(
-                f"self-change {change.get('target')!r} is not verified "
-                f"(verdict={change.get('verdict')}) — it cannot take effect. "
-                "An independent verifier must confirm it first.")
+                f"self-change {change.get('target')!r} has no independent verified "
+                f"verdict on the record (claim={claim_id}, verdict="
+                f"{change.get('verdict')}) — it cannot take effect. The ledger, not "
+                "the reflection's own flag, is the authority.")
         return change

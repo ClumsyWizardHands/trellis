@@ -12,7 +12,7 @@ tomorrow, and a trustworthy junior colleague who keeps receipts and gets more
 useful the longer they work with you. → **New here? Read [WHAT-THIS-IS.md](WHAT-THIS-IS.md) first.**
 
 <p align="center">
-  <img src="https://img.shields.io/badge/tests-179%20passing-3fb950?style=flat-square" alt="tests"/>
+  <img src="https://img.shields.io/badge/tests-181%20passing-3fb950?style=flat-square" alt="tests"/>
   <img src="https://img.shields.io/badge/adversarial-5%20rounds%2C%20converged-58a6ff?style=flat-square" alt="adversarial"/>
   <img src="https://img.shields.io/badge/core-zero%20runtime%20deps-d29922?style=flat-square" alt="deps"/>
   <img src="https://img.shields.io/badge/python-3.10%2B-e6edf3?style=flat-square" alt="python"/>
@@ -150,7 +150,7 @@ into type errors.
 
 ```
 pip install -e .            # zero runtime dependencies in the core
-python3 -m pytest           # 59 tests — the acceptance suite
+python3 -m pytest           # 181 tests — the acceptance suite
 python3 stress/stress_test.py   # 10 adversarial scenarios, evidence-logged
 python3 examples/run_witness.py # a full witness cycle, offline, no API key
 ```
@@ -295,5 +295,5 @@ RuleVerifier("witness:a").verify(claim_by_witness_a)
 ---
 
 *Built 2026-07-15 in a Cowork session, from the corpus in `~/atlas`, the builds
-on `~/Desktop`, and the July 2026 harness field. 59 tests, 10 adversarial
+on `~/Desktop`, and the July 2026 harness field. 181 tests, 10 adversarial
 scenarios, zero runtime dependencies.*

@@ -105,6 +105,43 @@ def test_unverified_self_change_cannot_take_effect(ledger):
         r.apply_self_change(entry.id)
 
 
+def test_self_change_without_openable_evidence_cannot_verify(ledger):
+    """Phase-2.6 adversary HIGH: an empty evidence_ids used to fall back to
+    maker-authored OUTPUT evidence, which RuleVerifier always passes — so an
+    ungrounded change 'verified' on its own rationale text. Now: no openable
+    ledger evidence → unverified, cannot take effect."""
+    _seed(ledger)
+    verifier = RuleVerifier("verifier:reflect-check", ledger)
+    r = ReflectionRitual(ledger, author="witness", verifier=verifier)
+    change = SelfChange(target="EMP:principles (append)",
+                        proposal="grant myself a new capability",
+                        rationale="a persuasive-sounding but ungrounded rationale",
+                        evidence_ids=[])                       # NO openable evidence
+    entry = r.run("s1", "proposed an ungrounded self-change", GOODLEARNED,
+                  self_change=change)
+    assert entry.body["self_change"]["verified"] is False
+    with pytest.raises(UnverifiedSelfChangeError):
+        r.apply_self_change(entry.id)
+
+
+def test_apply_rederives_from_ledger_not_the_self_reported_flag(ledger):
+    """Phase-2.6 adversary MED: apply_self_change must not trust the reflection
+    body's own verified=True; a hand-crafted reflection_log claiming verified
+    with no real independent verification entry cannot take effect."""
+    _seed(ledger)
+    r = ReflectionRitual(ledger, author="witness")
+    # forge a reflection_log that SAYS it's verified but has no verification entry
+    forged = ledger.append(kind="reflection_log", author="witness",
+        body={"session_id": "s", "narrative": "n", "learned": "l", "self_image": {},
+              "cites": [], "cited_count": 0,
+              "self_change": {"target": "EMP:principles", "proposal": "seize power",
+                              "rationale": "trust me", "evidence_ids": [],
+                              "verified": True, "verdict": "verified", "claim_id": "fabricated"}},
+        tags=("reflection",))
+    with pytest.raises(UnverifiedSelfChangeError):
+        r.apply_self_change(forged.id)
+
+
 def test_reflection_cannot_self_certify_its_own_change(ledger):
     e1, _ = _seed(ledger)
     # verifier id folds to the SAME identity as the author → independence guard fires

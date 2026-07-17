@@ -5,7 +5,7 @@ is not an audit.** Three layers, in order of increasing independence.
 
 ## Layer 1 — deterministic suite (the floor)
 
-`python3 -m pytest` — **179 tests**, structured as the acceptance checklist from
+`python3 -m pytest` — **181 tests**, structured as the acceptance checklist from
 the baby EMP (see ACCEPTANCE.md: the ten unforgivables mapped to named tests).
 Zero network, zero API keys, deterministic clock — a time bug cannot hide
 behind a real clock.
@@ -49,7 +49,7 @@ linter, pass-substance, synthesis-justification — which *cannot* converge agai
 unlimited exotic Unicode or semantic padding. Continuing to run rounds on those
 would be the perfectionism failure the harness is built against. They are
 improved once, labeled advisory, and backed by the real gates: an identity
-allowlist and human review. **179 tests, 10/10 stress.** Adversarial testing
+allowlist and human review. **181 tests, 10/10 stress.** Adversarial testing
 never "ends" — it reaches diminishing returns, and this is that point.
 
 **Round 5 (2026-07-17) applied the same discipline to a whole new subsystem** —
@@ -61,6 +61,15 @@ validity-that-can-elapse, not just ledger length; `active()` is now-only so no
 past query returns two heads). The plan for this build was *itself* adversarially
 stress-tested (8 agents, 4 flaws) and hardened **before** any code was written —
 the harness's doctrine applied to its own blueprint.
+
+**Round 6 (2026-07-17) attacked the reflection self-modification gate** — the
+highest-stakes new surface. It found a real HIGH: a self-change with no ledger
+evidence fell back to maker-authored OUTPUT evidence, which the deterministic
+verifier only checks for non-emptiness — so an ungrounded change could "verify"
+on its own rationale. Fixed: a self-change must cite openable ledger evidence or
+it stays unverified. The gate was further hardened to **re-derive** its verdict
+from the append-only record (an independent `verification` entry for the claim),
+never trusting the reflection body's own `verified` flag. Both pinned.
 
 
 The count falling 19 → 11 → 9 is the point: not a harness that was never broken,
