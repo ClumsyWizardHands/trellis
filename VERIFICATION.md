@@ -5,7 +5,7 @@ is not an audit.** Three layers, in order of increasing independence.
 
 ## Layer 1 — deterministic suite (the floor)
 
-`python3 -m pytest` — **183 tests**, structured as the acceptance checklist from
+`python3 -m pytest` — **222 tests**, structured as the acceptance checklist from
 the baby EMP (see ACCEPTANCE.md: the ten unforgivables mapped to named tests).
 Zero network, zero API keys, deterministic clock — a time bug cannot hide
 behind a real clock.
@@ -49,7 +49,7 @@ linter, pass-substance, synthesis-justification — which *cannot* converge agai
 unlimited exotic Unicode or semantic padding. Continuing to run rounds on those
 would be the perfectionism failure the harness is built against. They are
 improved once, labeled advisory, and backed by the real gates: an identity
-allowlist and human review. **183 tests, 10/10 stress.** Adversarial testing
+allowlist and human review. **222 tests, 10/10 stress.** Adversarial testing
 never "ends" — it reaches diminishing returns, and this is that point.
 
 **Round 5 (2026-07-17) applied the same discipline to a whole new subsystem** —
@@ -74,6 +74,19 @@ also caught a second HIGH — the once-daily cadence keyed off the caller-suppli
 `event_time`, so a future-dated reflection could wedge the schedule forever (or a
 back-dated one over-fire); fixed by keying `due()` off the harness-owned
 `write_time` (clock.py's "the harness owns time" premise). Pinned.
+
+**Round 7 (2026-07-17) took the same discipline to the contemplative backdrop** —
+the ingestion spine, the observation/opinion model, the reconciled vault, and the
+anti-satisficing curiosity loop. The **plan** was stress-tested first (6 lenses,
+22 candidates → 5 real problem-clusters: vault≠ledger reconstructability, two-node
+identity collision, provenance laundering, ingestion determinism, "two questions a
+day" as a checkmark) and hardened *before any code*. Then the **code** was attacked
+(8 agents): 5 real flaws confirmed and fixed at the root — an opinion-T crashing a
+half-written pair; resume leaking orphaned partial derived entries; two decisions
+colliding on one stable id; a time-corrected re-dump looking brand-new; and —
+the sharpest — `curiosity.resolve()` closing a question as "understood" on a DRY
+seek or the question's own entry (the exact "I searched → I understand" laundering
+the module exists to forbid). All pinned. **222 tests, 10/10 stress.**
 
 
 The count falling 19 → 11 → 9 is the point: not a harness that was never broken,
