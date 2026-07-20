@@ -585,6 +585,40 @@ schema, or the 12 gold-scenario eval program — those are the next steps, named
 
 ---
 
+## D25 — A verification pass means the OUTCOME held, not that a file exists ✅ fresh
+
+**Decision:** the deterministic verifier distinguishes **preconditions** from an **outcome**.
+Confirming that a file is present, a ledger id resolves, or an output is non-blank is
+`PRECONDITIONS_PASSED` — "the evidence is well-formed and openable" — **not** `VERIFIED`.
+`VERIFIED` is earned only when an **outcome predicate** (`expect_hash` / `expect_contains`
+/ `expect_kind`) was actually checked and held. An unopenable **external-only** claim is
+`INSUFFICIENT`, never verified. Trust counts only true verifications; `preconditions_passed`
+never inflates the ratio or the glyph's warmth.
+
+**Triangulation:**
+1. Codex infrastructure audit, Critical 4 (`docs/audits/AUDIT-2026-07-20.md`): `RuleVerifier`
+   *"verifies files by existence, not content… a claim supported only by `opaque://uncheckable`
+   received VERIFIED"* — the intended INSUFFICIENT branch was unreachable, and trust compounded
+   on artifact existence. The prescribed fix: rename the deterministic result so it cannot read
+   as semantic truth, add evidence resolvers that check content, and separate validation from
+   verdict.
+2. D4 (maker ≠ verifier) + the acceptance doctrine ("overconfidence on thin/stale info" is
+   unforgivable): a checker that passes on existence is exactly the "it works it works" the
+   harness exists to refuse — one layer deeper.
+3. D2 (append-only, attributed): the new status is recorded like any other verdict; the record
+   stays the authority (`reflect.apply_self_change` / `selfimprove.can_take_effect` re-derive a
+   genuine VERIFIED, now earned by an outcome predicate, not by an id that merely exists).
+
+**Consequence:** `trellis/verify.py` — `VerdictStatus.PRECONDITIONS_PASSED`, `Evidence`
+outcome predicates, external-only → INSUFFICIENT, honest `trust_record`; `reflect`/`selfimprove`
+attach an `expect_kind` predicate so a self-change earns a real VERIFIED (strictly more than "the
+id exists"); the glyph's trust reflects outcome-verification. Honest scope: full evidence
+provenance (origin/signatures/tenant), reproducible command/exit predicates, and
+trust-by-consequence are the larger evidence-resolver program Codex names — the next steps.
+Plan: `docs/PLAN-evidence-aware-verification.md`.
+
+---
+
 ## ⏳ Watch list (decisions deliberately NOT taken)
 
 - **W1 — No skill marketplace / no auto-installed skills.** [OPENCLAW] supply-chain

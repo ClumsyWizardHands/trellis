@@ -26,6 +26,7 @@ Mechanisms:
 
 from __future__ import annotations
 
+import hashlib
 import uuid
 from dataclasses import dataclass, field
 from datetime import timedelta
@@ -54,6 +55,16 @@ class Evidence:
     kind: EvidenceKind
     ref: str                 # path / entry id / text / url
     note: str = ""
+    # --- outcome predicates (Codex Critical 4): a claim can assert a CHECKABLE
+    # outcome, not just that an artifact exists. When any of these is set, the
+    # verifier performs a real content check — which is what earns VERIFIED rather
+    # than PRECONDITIONS_PASSED. ---
+    expect_hash: Optional[str] = None      # FILE: sha256 of the content must match
+    expect_contains: Optional[str] = None  # FILE/LEDGER: body must contain this substring
+    expect_kind: Optional[str] = None      # LEDGER: the entry must be of this kind
+
+    def has_predicate(self) -> bool:
+        return bool(self.expect_hash or self.expect_contains or self.expect_kind)
 
 
 @dataclass
@@ -73,7 +84,10 @@ class CompletionClaim:
 
 
 class VerdictStatus(str, Enum):
-    VERIFIED = "verified"
+    VERIFIED = "verified"           # an OUTCOME predicate was checked and held
+    PRECONDITIONS_PASSED = "preconditions_passed"   # evidence well-formed & openable,
+                                    # but no claimed outcome was independently confirmed —
+                                    # NOT "the claim is true" (Codex Critical 4)
     REFUTED = "refuted"
     INSUFFICIENT = "insufficient"   # honest "cannot verify" — never silently passed
 
@@ -127,38 +141,68 @@ class RuleVerifier:
     def verify(self, claim: CompletionClaim) -> Verdict:
         _guard_independence(claim, self.id)
         checks: list[Check] = []
+        outcome_checks = 0        # predicates that checked a real OUTCOME (not existence)
+        external_only_unopenable = 0
 
         for ev in claim.evidence:
             if ev.kind == EvidenceKind.FILE:
                 p = Path(ev.ref)
-                # is_file(), not exists(): a directory is not the file the
-                # claim says it produced (found by the adversary, #48). Also
-                # resolves symlinks, so a dangling link fails honestly.
+                # is_file(), not exists(): a directory is not the file the claim
+                # says it produced (#48). Existence is a PRECONDITION, not the outcome.
                 is_file = p.is_file()
-                checks.append(Check(
-                    name=f"file exists: {ev.ref}",
-                    passed=is_file,
-                    detail="" if is_file else
-                           ("path is a directory, not a file" if p.is_dir()
-                            else "claimed file does not exist"),
-                ))
+                checks.append(Check(f"file exists: {ev.ref}", is_file,
+                    "" if is_file else ("path is a directory, not a file" if p.is_dir()
+                                        else "claimed file does not exist")))
+                if is_file and (ev.expect_hash or ev.expect_contains):
+                    content = p.read_text(encoding="utf-8", errors="replace")
+                    if ev.expect_hash is not None:
+                        h = hashlib.sha256(content.encode("utf-8")).hexdigest()
+                        ok = h == ev.expect_hash
+                        checks.append(Check(f"file content hash matches: {ev.ref}", ok,
+                                            "" if ok else f"sha256 {h[:12]}… != expected {ev.expect_hash[:12]}…"))
+                        outcome_checks += 1
+                    if ev.expect_contains is not None:
+                        ok = ev.expect_contains in content
+                        checks.append(Check(f"file contains expected content: {ev.ref}", ok,
+                                            "" if ok else f"'{ev.expect_contains[:40]}' not found in the file"))
+                        outcome_checks += 1
             elif ev.kind == EvidenceKind.LEDGER:
                 if self.ledger is None:
                     checks.append(Check(f"ledger ref {ev.ref}", False,
                                         "no ledger available to this verifier"))
                 else:
-                    found = self.ledger.get(ev.ref) is not None
+                    entry = self.ledger.get(ev.ref)
+                    found = entry is not None
                     checks.append(Check(f"ledger entry exists: {ev.ref}", found,
                                         "" if found else "no such ledger entry"))
+                    if found and ev.expect_kind is not None:
+                        ok = entry.kind == ev.expect_kind
+                        checks.append(Check(f"ledger entry is a {ev.expect_kind}: {ev.ref}", ok,
+                                            "" if ok else f"entry is a {entry.kind}, not a {ev.expect_kind}"))
+                        outcome_checks += 1
+                    if found and ev.expect_contains is not None:
+                        import json as _json
+                        blob = _json.dumps(entry.body, ensure_ascii=False, default=str)
+                        ok = ev.expect_contains in blob
+                        checks.append(Check(f"ledger entry contains expected content: {ev.ref}", ok,
+                                            "" if ok else f"'{ev.expect_contains[:40]}' not in the entry body"))
+                        outcome_checks += 1
             elif ev.kind == EvidenceKind.OUTPUT:
                 ok = bool(ev.ref.strip())
                 checks.append(Check("output evidence non-empty", ok))
             else:
-                checks.append(Check(f"external ref noted: {ev.ref}", True,
-                                    "external evidence cannot be opened here — "
-                                    "weakest evidence class, flagged not failed"))
+                # external evidence CANNOT be opened here → NOTED, not a failure
+                # (a real file alongside it should not be refuted by it) and NOT a
+                # pass (marking it passed was the Codex bug: an external-ONLY claim
+                # then reached VERIFIED). It is unconfirmable; the real_evidence
+                # count below turns an external-only claim into INSUFFICIENT.
+                checks.append(Check(f"external ref (noted; cannot open here): {ev.ref}", True,
+                                    "external evidence cannot be opened by this verifier — "
+                                    "weakest class; unconfirmable, not counted as an outcome"))
+                external_only_unopenable += 1
 
-        # time sanity: a claim about work done "now" whose loop run is ancient
+        # time sanity: a claim about work done "now" whose loop run is ancient. A
+        # passing recency/outcome check IS an outcome check (it confirms the run).
         if claim.loop_run_id and self.ledger is not None:
             runs = [e for e in self.ledger.entries()
                     if e.kind == "loop_run_end"
@@ -169,18 +213,25 @@ class RuleVerifier:
                                     "claim references a run that never concluded"))
             else:
                 age = self.ground.now() - runs[-1].stamp.event_time
-                checks.append(Check("loop run recency", age <= self.max_claim_age,
-                                    f"run concluded {age} ago"))
-                checks.append(Check(
-                    "loop outcome is ok",
-                    runs[-1].body.get("outcome") == "ok",
-                    f"outcome was {runs[-1].body.get('outcome')}"))
+                recency_ok = age <= self.max_claim_age
+                outcome_ok = runs[-1].body.get("outcome") == "ok"
+                checks.append(Check("loop run recency", recency_ok, f"run concluded {age} ago"))
+                checks.append(Check("loop outcome is ok", outcome_ok,
+                                    f"outcome was {runs[-1].body.get('outcome')}"))
+                outcome_checks += 2
 
-        hard = [c for c in checks if not c.passed]
-        status = VerdictStatus.VERIFIED if not hard else VerdictStatus.REFUTED
-        # If the only failures are unopenable externals, be honest, not harsh:
-        if hard and all("external" in c.name for c in hard):
-            status = VerdictStatus.INSUFFICIENT
+        hard = [c for c in checks if not c.passed]   # real failures (external is noted, not failed)
+        real_evidence = len(claim.evidence) - external_only_unopenable
+        if hard:
+            status = VerdictStatus.REFUTED               # a real (openable) check failed
+        elif real_evidence == 0:
+            status = VerdictStatus.INSUFFICIENT          # only unopenable externals — cannot confirm
+        elif outcome_checks > 0:
+            status = VerdictStatus.VERIFIED              # an OUTCOME was checked and held
+        else:
+            # evidence well-formed and openable, but no OUTCOME was checked —
+            # preconditions passed, NOT "the claim is true" (Codex Critical 4).
+            status = VerdictStatus.PRECONDITIONS_PASSED
         return Verdict(claim_id=claim.id, verifier=self.id, status=status,
                        checks=checks)
 
@@ -266,9 +317,12 @@ def trust_record(ledger: Ledger, maker: str) -> dict:
     three trust buckets (human-decides / agent-helps / agent-does)."""
     entries = [e for e in ledger.entries()
                if e.kind == "verification" and e.body.get("maker") == maker]
-    counts = {"verified": 0, "refuted": 0, "insufficient": 0}
+    counts = {"verified": 0, "preconditions_passed": 0, "refuted": 0, "insufficient": 0}
     for e in entries:
         counts[e.body["status"]] = counts.get(e.body["status"], 0) + 1
     total = sum(counts.values())
+    # verified_ratio counts ONLY true outcome-verifications — preconditions_passed
+    # is honest ("evidence openable") but is NOT a semantic pass and must not inflate
+    # trust (Codex Critical 4: don't compound trust on artifact existence).
     return {"maker": maker, "total": total, **counts,
             "verified_ratio": (counts["verified"] / total) if total else None}

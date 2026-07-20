@@ -248,11 +248,20 @@ class ImprovementEngine:
                               "entries an independent verifier can inspect")
             return self.ledger.append(PROPOSAL_KIND, self.author, record,
                                       tags=("improve", p.target.value, "unverified"))
+        # Attach an OUTCOME predicate (expect_kind) so the verifier resolves and
+        # type-checks each cited entry — more than existence (Codex Critical 4). The
+        # human ratification remains the semantic gate; this makes the deterministic
+        # floor a real content check, not "any existing id verifies."
+        evidence = []
+        for eid in p.evidence_ids:
+            e = self.ledger.get(eid)
+            evidence.append(Evidence(EvidenceKind.LEDGER, eid,
+                                     expect_kind=e.kind if e is not None else "__missing__"))
         claim = CompletionClaim(
             maker=self.author,
             task=f"improvement proposal: {p.target.value}",
             summary=f"{p.proposal} — {p.rationale}",
-            evidence=[Evidence(EvidenceKind.LEDGER, eid) for eid in p.evidence_ids])
+            evidence=evidence)
         record["claim_id"] = claim.id
         if self.verifier is not None:
             verdict = self.verifier.verify(claim)      # raises if maker == verifier

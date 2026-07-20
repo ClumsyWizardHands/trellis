@@ -97,9 +97,12 @@ def seed_ledger() -> Ledger:
             else:
                 run.ok("recorded opinions; read updated", evidence=[f])
         if i < 5:
+            # an OUTCOME predicate (the read file actually contains the current
+            # read), so these earn a real VERIFIED — not existence alone (D25).
             c = CompletionClaim(maker="witness", task="keep the read current",
                                 summary="recorded opinions; read updated",
-                                evidence=[Evidence(EvidenceKind.FILE, f)])
+                                evidence=[Evidence(EvidenceKind.FILE, f,
+                                                   expect_contains="current read")])
             record_verdict(L, c, checker.verify(c))
     bad = CompletionClaim(maker="witness", task="x", summary="y",
                           evidence=[Evidence(EvidenceKind.FILE, str(demo / "ws" / "nope.md"))])

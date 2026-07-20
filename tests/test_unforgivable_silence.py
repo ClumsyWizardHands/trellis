@@ -142,15 +142,28 @@ def test_model_verifier_unparseable_means_insufficient_never_verified(ledger):
 
 
 def test_trust_compounds_in_the_ledger(ledger, tmp_path):
-    f = tmp_path / "ev.md"; f.write_text("evidence")
+    """Trust compounds per maker — and counts HONESTLY (Codex Critical 4):
+    existence-only evidence is PRECONDITIONS_PASSED, not VERIFIED; only an OUTCOME
+    predicate that holds earns a verified verdict that raises the trust ratio."""
+    f = tmp_path / "ev.md"; f.write_text("the funder confirmed on Friday")
     checker = RuleVerifier("checker:1", ledger)
+    # 3 existence-only claims → preconditions passed, NOT verified (no outcome checked)
     for _ in range(3):
         c = CompletionClaim(maker="witness:a", task="t", summary="s",
                             evidence=[Evidence(EvidenceKind.FILE, str(f))])
         record_verdict(ledger, c, checker.verify(c))
+    # a missing file → refuted
     bad = CompletionClaim(maker="witness:a", task="t", summary="s",
                           evidence=[Evidence(EvidenceKind.FILE, str(tmp_path / "no.md"))])
     record_verdict(ledger, bad, checker.verify(bad))
+    # an OUTCOME predicate that holds → a real verified
+    good = CompletionClaim(maker="witness:a", task="t", summary="s",
+                           evidence=[Evidence(EvidenceKind.FILE, str(f),
+                                              expect_contains="funder confirmed")])
+    record_verdict(ledger, good, checker.verify(good))
     tr = trust_record(ledger, "witness:a")
-    assert tr["total"] == 4 and tr["verified"] == 3 and tr["refuted"] == 1
-    assert tr["verified_ratio"] == 0.75
+    assert tr["total"] == 5
+    assert tr["preconditions_passed"] == 3   # existence alone no longer inflates trust
+    assert tr["verified"] == 1               # only the real outcome check
+    assert tr["refuted"] == 1
+    assert tr["verified_ratio"] == 0.2       # 1 of 5, not 4 of 5

@@ -66,8 +66,12 @@ def self_image_stats(ledger: Ledger, ground: Optional[TimeGround] = None) -> dic
     g = ground or ledger.ground
     entries = ledger.entries()
     verifs = [e for e in entries if e.kind == "verification"]
+    # verified = a real OUTCOME verification only; checked includes
+    # preconditions_passed (evidence was inspected, outcome not confirmed) so the
+    # glyph's trust honestly reflects outcome-verification, not artifact existence.
     verified = sum(1 for e in verifs if e.body.get("status") == "verified")
-    checked = sum(1 for e in verifs if e.body.get("status") in ("verified", "refuted"))
+    checked = sum(1 for e in verifs
+                  if e.body.get("status") in ("verified", "refuted", "preconditions_passed"))
     decisions = ledger.active("decision")
     memories = ledger.active("memory_write")
     loop_ends = [e for e in entries if e.kind == "loop_run_end"]
@@ -223,11 +227,22 @@ class ReflectionRitual:
             record["note"] = ("no openable evidence — a self-change must cite real "
                               "ledger entries an independent verifier can inspect")
             return record
+        # Attach an OUTCOME predicate (expect_kind): the verifier must RESOLVE each
+        # cited entry and confirm it is of the kind the maker names — strictly more
+        # than "the id exists" (Codex Critical 4). A mismatched id REFUTES. The
+        # verifier still can't judge whether the evidence SUPPORTS the change — that
+        # is the model verifier's / human's job — but the id must be real evidence
+        # of the claimed type, not any existing id.
+        evidence = []
+        for eid in change.evidence_ids:
+            e = self.ledger.get(eid)
+            evidence.append(Evidence(EvidenceKind.LEDGER, eid,
+                                     expect_kind=e.kind if e is not None else "__missing__"))
         claim = CompletionClaim(
             maker=self.author,
             task=f"self-change proposal: {change.target}",
             summary=f"{change.proposal} — {change.rationale}",
-            evidence=[Evidence(EvidenceKind.LEDGER, eid) for eid in change.evidence_ids])
+            evidence=evidence)
         record["claim_id"] = claim.id
         if self.verifier is not None:
             verdict = self.verifier.verify(claim)          # raises if maker==verifier
