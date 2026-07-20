@@ -143,6 +143,47 @@ def inbox(ledger: Ledger, ground: Optional[TimeGround] = None) -> list[dict]:
             if r["status"] == "staged" and r["event"] in ("staged", None)]
 
 
+def staging_author(ledger: Ledger, action_id: str) -> Optional[str]:
+    """The agent that STAGED an action (the author of its 'staged' event) — the
+    party the independence gate must keep out of its own approval seat."""
+    for e in ledger.entries():
+        if (e.kind == "staged_action" and e.body.get("action_id") == action_id
+                and e.body.get("event", "staged") in ("staged", None)
+                and e.body.get("status") == "staged"):
+            return e.author
+    return None
+
+
+def approval_guard(ledger: Ledger, action_id: str, human: str) -> Optional[str]:
+    """Return an error string if this approve/deny must be REFUSED, else None.
+
+    The web endpoint writes the authoritative staged_action lifecycle event that
+    `inbox()` reads back as truth, so it must enforce the SAME guard the library
+    `stage.Outbox.approve` does — otherwise refusal #5 (the staging agent cannot
+    approve itself) holds in the core but is bypassable on the actual human-facing
+    surface. Checks: a named human, a real staged action, and maker != approver
+    (identity-normalized, so 'WITNESS:A'/'witness:a' can't disguise a self-yes)."""
+    from trellis.identity import (InvalidIdentityError, is_effectively_blank,
+                                  require_identity, same_identity)
+    if is_effectively_blank(human):
+        return "approval requires a named human — a blank yes is not a yes"
+    # ASCII-identity allowlist (parity with stage.Outbox and verify): a homoglyph
+    # of the staging agent's id (Cyrillic 'witnеss' for 'witness') would slip past
+    # same_identity, which does not fold confusables. Refuse an exotic id outright.
+    try:
+        require_identity(human, "approver")
+    except InvalidIdentityError:
+        return ("approval requires a plain ASCII identity — an exotic/homoglyph id "
+                "is refused, not guessed (that was a self-approval bypass)")
+    stager = staging_author(ledger, action_id)
+    if stager is None:
+        return f"no staged action {action_id!r} is waiting — nothing to act on"
+    if same_identity(human, stager):
+        return ("the staging agent cannot approve or deny its own action — "
+                "approval is the human seat, the last step before the world")
+    return None
+
+
 # ---- trust panel: verification outcomes per maker --------------------------
 
 def trust_panel(ledger: Ledger, ground: Optional[TimeGround] = None) -> list[dict]:

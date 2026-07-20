@@ -24,7 +24,7 @@ from enum import Enum
 from typing import Callable, Optional
 
 from .clock import TimeGround
-from .identity import same_identity
+from .identity import InvalidIdentityError, require_identity, same_identity
 from .ledger import Ledger
 from .surfaces import ConversationKey
 
@@ -81,21 +81,39 @@ class Outbox:
 
     # ----- human side -------------------------------------------------------
 
+    def _require_approver(self, human: str, created_by: str) -> None:
+        """The independence gate for the human seat. Two ways it can be defeated,
+        both closed here:
+          1. A blank / same-as-maker id (case/space disguise) — refused.
+          2. A homoglyph of the maker's id (Cyrillic 'witnеss' for 'witness').
+             same_identity does NOT fold confusables (that would merge distinct
+             real names like мир/mir), so it would MISS the homoglyph. The fix is
+             the same ASCII-identity allowlist verify._guard_independence uses:
+             an approver id must reduce to a valid ASCII identifier, or it is
+             REFUSED — an exotic id is never reasoned about."""
+        try:
+            require_identity(human, "approver")
+        except InvalidIdentityError as e:
+            raise UnapprovedFireError(
+                f"approval refused: {e}. The human seat requires a plain ASCII "
+                "identity — an exotic/homoglyph id is refused, not guessed "
+                "(that was a self-approval bypass of refusal #5).")
+        if same_identity(human, created_by):
+            raise UnapprovedFireError(
+                "the staging agent cannot approve or deny its own action — "
+                "approval is the human seat (disguised self-approval was a live "
+                "bypass found in review; identity comparison is normalized now)")
+
     def approve(self, action_id: str, human: str) -> None:
         a = self._require(action_id)
-        if not human.strip():
-            raise UnapprovedFireError("approval requires a named human")
-        if same_identity(human, a.created_by):
-            raise UnapprovedFireError(
-                "the staging agent cannot approve its own action — approval is "
-                "the human seat (disguised self-approval was a live bypass "
-                "found in review; identity comparison is normalized now)")
+        self._require_approver(human, a.created_by)
         a.status = ActionStatus.APPROVED
         a.approved_by = human
         self._log(a, human, "approved")
 
     def deny(self, action_id: str, human: str, reason: str) -> None:
         a = self._require(action_id)
+        self._require_approver(human, a.created_by)
         a.status = ActionStatus.DENIED
         a.denial_reason = reason
         self._log(a, human, "denied", reason=reason)

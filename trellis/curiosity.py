@@ -167,19 +167,46 @@ class QuestionLog:
                      "affirmation", "retirement"}
         active_ids = {x.id for x in self.ledger.active()}
         chain = {e.id for e in self.ledger.lineage(q.id)}   # the question's own chain
+        # The map-move must be TIED TO THIS QUESTION, not just any change that
+        # postdates it. A live decision about something else ("I made an unrelated
+        # move, therefore I understand this") is the same satisficing as a dry
+        # seek, one step removed. The tie is a recorded, NON-DRY seek of THIS
+        # assumption whose delta includes the cited entry — so closing rests on an
+        # honest pursuit of the question, not on unrelated activity.
+        #
+        # Honest boundary (structural vs advisory): this closes the trivial hole
+        # (cite ANY postdating entry) structurally — an unrelated move with no
+        # linking seek can no longer resolve a question. What remains is an
+        # ADVISORY boundary: the seek's `map_changed`/`delta_refs` are the agent's
+        # own self-report, unverified, so a determined agent could still fabricate
+        # a non-dry seek asserting an unrelated delta really moved this question.
+        # That is a strictly higher bar (a durable, attributed false record vs.
+        # pointing at incidental activity) but not airtight — no lexical test
+        # proves a delta is *about* an assumption. `dry_streak` does NOT catch it
+        # (it counts only consecutive DRY seeks); the real backstop is the human
+        # reading the resolution's cited seek + delta on the Curiosities board.
+        pursued: set = set()
+        for e in self.ledger.entries():
+            if (e.kind == SEEK_KIND and e.body.get("assumption_key") == akey
+                    and e.body.get("map_changed") and e.stamp.write_time >= asked_at):
+                pursued.update(e.body.get("delta_refs") or [])
         real = []
         for ref in evidence_refs or []:
             e = self.ledger.get(ref)
             if (e is not None and e.id not in chain and e.kind not in machinery
-                    and e.id in active_ids and e.stamp.write_time >= asked_at):
+                    and e.id in active_ids and e.stamp.write_time >= asked_at
+                    and ref in pursued):
                 real.append(ref)
         if not real:
             raise NotResolvedError(
                 "a question can't be closed as understood without evidence that "
                 "the map genuinely MOVED since it was asked — a new observation, a "
-                "shifted confidence, a sharpened decision. A dry seek, a re-ask, or "
-                "the question itself is not a move: 'I searched' is not 'I "
-                "understand.' Bring a real, live map-change, or leave it open.")
+                "shifted confidence, a sharpened decision — AND that the move came "
+                "from pursuing THIS assumption (a non-dry seek of this question "
+                "whose delta is the cited change). A dry seek, a re-ask, the "
+                "question itself, or an unrelated move is not it: 'I searched' and "
+                "'I did some work' are not 'I understand.' Bring a real, live, "
+                "pursued map-change, or leave it open.")
         return self.ledger.append(
             kind=QUESTION_KIND, author=author,
             body={**q.body, "status": "resolved", "resolved_how": how,

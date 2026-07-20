@@ -49,6 +49,22 @@ def test_inbox_shows_pending_only(populated, ground):
     assert len(box) == 1 and box[0]["kind"] == "discord_post"
 
 
+def test_web_approval_refuses_staging_agent_self_approval(populated, ground):
+    """Refusal #5 on the actual approval surface: the web /approve path writes the
+    authoritative staged_action lifecycle event that inbox() reads as truth, so it
+    must apply the same maker!=approver guard the library Outbox does. The staged
+    action in `populated` was created by 'witness:a'."""
+    aid = views.inbox(populated, ground)[0]["action_id"]
+    # the staging agent tries to approve its own action, disguised by case/space
+    assert views.approval_guard(populated, aid, "WITNESS:A ") is not None
+    assert views.approval_guard(populated, aid, "witness:a") is not None
+    # a blank human is not a yes; an unknown action has nothing to act on
+    assert views.approval_guard(populated, aid, "   ") is not None
+    assert views.approval_guard(populated, "nope", "alex") is not None
+    # a real, independent human is allowed
+    assert views.approval_guard(populated, aid, "alex") is None
+
+
 def test_roster_and_memory_map(populated, ground):
     ros = views.roster(populated, ground)
     assert any(r["agent"] == "witness:a" for r in ros)

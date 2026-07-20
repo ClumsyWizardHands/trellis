@@ -28,6 +28,24 @@ def test_disguised_self_approval_is_refused(ledger):
             box.approve(aid, human=disguise)
 
 
+def test_homoglyph_self_approval_is_refused(ledger):
+    """AUDIT HIGH (2026-07-17): 'witness' could self-approve its own staged action
+    via a Cyrillic-е homoglyph 'witnеss' — same_identity deliberately does NOT
+    fold confusables (to avoid merging distinct real names), and the approval gate
+    never applied the ASCII-identity allowlist (require_identity) the way the
+    verification gate does. A non-ASCII approver id is now REFUSED, not reasoned
+    about — parity with verify._guard_independence. Closes refusal #5's homoglyph
+    hole in the core."""
+    box = Outbox(ledger)
+    aid = box.stage(StagedAction("post", "#x", "content", created_by="witness"))
+    with pytest.raises(UnapprovedFireError):
+        box.approve(aid, human="witnеss")   # Cyrillic е — self-approval in disguise
+    # and deny is guarded the same way
+    aid2 = box.stage(StagedAction("post", "#x", "content", created_by="witness"))
+    with pytest.raises(UnapprovedFireError):
+        box.deny(aid2, human="witnеss", reason="sneaky")
+
+
 def test_same_identity_normalization():
     assert same_identity("WITNESS:A", "witness:a")
     assert same_identity("witness:a.", " witness:a ")

@@ -22,7 +22,7 @@ import os
 from pathlib import Path
 
 try:
-    from fastapi import FastAPI, Form, Request
+    from fastapi import FastAPI, Form, HTTPException, Request
     from fastapi.responses import HTMLResponse, StreamingResponse, RedirectResponse
 except ImportError as e:  # pragma: no cover
     raise SystemExit("the web UI needs FastAPI: pip install 'trellis-harness[web]'") from e
@@ -588,6 +588,9 @@ def ingestion_page(frag: int = 0):
 
 @app.post("/affirm")
 def affirm(decision_id: str = Form(...), human: str = Form(...)):
+    from trellis.identity import is_effectively_blank
+    if is_effectively_blank(human):
+        raise HTTPException(status_code=400, detail="an affirmation needs a named human")
     led = _ledger()
     led.append(kind="affirmation", author=human,
                body={"decision_id": decision_id, "via": "web-ui"},
@@ -656,8 +659,16 @@ def deny(action_id: str = Form(...), human: str = Form(...)):
 
 def _record_decision(action_id: str, human: str, approve: bool) -> None:
     """Record the human's approval/denial to the ledger — the audit trail the
-    inbox reads. (Firing the action itself is the harness's job, not the UI's.)"""
+    inbox reads. (Firing the action itself is the harness's job, not the UI's.)
+
+    The independence gate lives here too, not only in stage.Outbox: this endpoint
+    writes the authoritative lifecycle event, so without the guard the staging
+    agent could self-approve on the UI even though the library refuses it
+    (refusal #5). approval_guard enforces named-human + maker != approver."""
     led = _ledger()
+    problem = views.approval_guard(led, action_id, human)
+    if problem:
+        raise HTTPException(status_code=403, detail=problem)
     led.append(kind="staged_action", author=human,
                body={"action_id": action_id, "event": "approved" if approve else "denied",
                      "status": "approved" if approve else "denied", "via": "web-ui"},

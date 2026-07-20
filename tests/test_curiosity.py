@@ -113,6 +113,33 @@ def test_cannot_close_on_a_dry_seek_or_the_question_itself(ledger, ground, clock
         ql.resolve(ak, "circular", evidence_refs=[qentry.id], author="witness")
 
 
+def test_cannot_close_on_an_unrelated_postdating_move(ledger, ground, clock):
+    """A live decision written after the question, about something ELSE, is not
+    evidence that THIS question's map moved. Closing on it is the same
+    satisficing the module forbids, just via an unrelated move instead of a dry
+    seek: 'I did some work, therefore I understand this'. The close must be tied
+    to a recorded, non-dry pursuit of THIS assumption."""
+    ql = QuestionLog(ledger, ground)
+    ql.ask(_q(ground=ground), "witness")
+    ak = assumption_key("the funder is aligned on pricing")
+    clock.advance(hours=1)
+    # a real, live, postdating decision — but about a completely different question,
+    # and with NO seek tying it to this assumption
+    unrelated = ledger.append("decision", "witness",
+                              {"decision_id": "u", "subject": "hiring plan for Q3",
+                               "question_key": "hiring-plan-for-q3", "verdict": "Y"})
+    with pytest.raises(NotResolvedError):
+        ql.resolve(ak, "pointing at an unrelated move", evidence_refs=[unrelated.id],
+                   author="witness")
+    # but once the agent records a non-dry seek of THIS assumption whose delta is
+    # that entry, the close is honest and permitted
+    ql.record_seek(ak, "chased the funder question and it moved the pricing read",
+                   map_changed=True, delta_refs=[unrelated.id], author="witness")
+    entry = ql.resolve(ak, "the pursuit of this assumption moved the map",
+                       evidence_refs=[unrelated.id], author="witness")
+    assert entry.body["status"] == "resolved"
+
+
 def test_cannot_close_on_a_retired_entry(ledger, ground, clock):
     ql = QuestionLog(ledger, ground)
     ql.ask(_q(ground=ground), "witness")

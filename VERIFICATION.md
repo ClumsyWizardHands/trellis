@@ -88,6 +88,50 @@ the sharpest — `curiosity.resolve()` closing a question as "understood" on a D
 seek or the question's own entry (the exact "I searched → I understand" laundering
 the module exists to forbid). All pinned. **222 tests, 10/10 stress.**
 
+**Round 8 (2026-07-17) — an external audit turned on the seams between modules and
+the web surface** (the unit tests cover each module in isolation; fewer cover the
+cross-module and UI write paths). The floor held under attack: the ledger's five
+refusals, the anti-fork on the question-key, the two-node observation model,
+ingestion idempotency + crash/resume, the vault reconciler, and the reflection
+gate all survived their breakers, and a full contemplation-day flow reconstructed
+correctly across three process restarts from the file alone. Three real defects
+were confirmed (each independently re-derived by a second agent from a fresh
+reading) and fixed at the root, regression-first:
+
+- **HIGH — refusal #5 bypass on the actual approval surface.** The web `/approve`
+  and `/deny` endpoints wrote the authoritative `staged_action` lifecycle event
+  (the one `views.inbox()` reads as truth) **without** the independence guard the
+  library `stage.Outbox.approve` enforces — so the staging agent could self-approve
+  its own outbound action through the UI. Fixed: `views.approval_guard` (named
+  human + maker ≠ approver, identity-normalized) gates every web approve/deny;
+  `/affirm` rejects a blank human with 400 instead of a 500.
+- **HIGH — refusal #5 bypass via homoglyph, in the core.** `stage.Outbox.approve`
+  used only `same_identity(human, created_by)`, which deliberately does not fold
+  confusables — so a staging agent `witness` could self-approve as `witnеss`
+  (Cyrillic е). The ASCII-identity allowlist (`identity.require_identity`) that
+  closes this for the *verification* gate (`verify._guard_independence`) was never
+  wired into the *approval* gate. Fixed: `approve`/`deny` (and the web guard) now
+  require an ASCII identity — an exotic id is **refused, not reasoned about**,
+  parity with the verifier gate.
+- **MEDIUM — a satisficing hole in `curiosity.resolve()`.** Closing a question
+  accepted **any** live decision that merely postdated it, even one about an
+  unrelated topic ("I made some unrelated move, therefore I understand this") —
+  the same laundering the module forbids, one step removed. Fixed: the cited
+  map-move must appear in the `delta_refs` of a **non-dry seek of this assumption**,
+  tying the close to a recorded pursuit of *this* question. Honest boundary: the
+  seek is a self-report, so this is a strictly higher bar (a durable false record)
+  rather than an airtight proof — labelled advisory in the code, with the human
+  reading the cited seek+delta as the real backstop.
+
+Also confirmed as an **honest advisory boundary, not a fix**: a single malformed
+observation candidate (an opinion-T with no POVs) raises loudly out of
+`Ingestor.ingest` — intended fail-loud, pinned by
+`test_opinion_T_without_povs_leaves_no_half_written_pair` — but the raise aborts
+the whole batch and the item re-crashes on every resume. Whether to isolate
+per-candidate failures (record-and-continue, as the accept=False path already
+does) is a **decision for the human**, since it changes that pinned test's
+expectation. **225 tests, 10/10 stress.**
+
 
 The count falling 19 → 11 → 9 is the point: not a harness that was never broken,
 but one broken **cheaply, in the open, and closed at the root** each round. The
