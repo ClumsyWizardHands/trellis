@@ -128,3 +128,95 @@ def test_trusted_skill_add_is_not_forced_to_N(ledger, ground):
 
 def test_capability_key_folds_homoglyphs_and_case():
     assert capability_key("Summarize a Doc") == capability_key("summarize a doc")
+
+
+# ----- Phase 2: the confusion harvest -------------------------------------
+
+from trellis.selfimprove import (ConfusionHarvest, PerformedConfusionError,
+                                 FRICTION_KIND)
+
+
+def test_harvest_turns_a_protocol_violation_into_friction(ledger, ground):
+    ledger.append("loop_run_end", "witness",
+                  {"run_id": "r1", "loop": "witness.watch", "outcome": "protocol_violation"})
+    h = ConfusionHarvest(ledger, agent_id="witness", ground=ground)
+    burns = h.harvest()
+    assert len(burns) == 1 and burns[0].body["stumble"] == "protocol_violation"
+    assert burns[0].body["source_ref"]                    # grounded in the real entry
+    assert "protocol_violation" in h.harvested_friction()[0]
+
+
+def test_harvest_catches_self_refutation(ledger, ground):
+    ledger.append("verification", "verifier:check",
+                  {"claim_id": "c1", "maker": "witness", "status": "refuted"})
+    burns = ConfusionHarvest(ledger, "witness", ground).harvest()
+    assert any(b.body["stumble"] == "self_refuted" for b in burns)
+
+
+def test_harvest_catches_a_human_correction_of_the_agent(ledger, ground):
+    mine = ledger.append("decision", "witness", {"decision_id": "d1", "subject": "my read"})
+    ledger.append("decision", "alex", {"decision_id": "d1b", "subject": "corrected read"},
+                  supersedes=mine.id)
+    burns = ConfusionHarvest(ledger, "witness", ground).harvest()
+    assert any(b.body["stumble"] == "human_correction" for b in burns)
+
+
+def test_harvest_is_idempotent(ledger, ground):
+    ledger.append("loop_run_end", "witness", {"run_id": "r1", "outcome": "failed", "reason": "x"})
+    h = ConfusionHarvest(ledger, "witness", ground)
+    first = h.harvest()
+    second = h.harvest()                                  # re-run: no double-count
+    assert len(first) == 1 and len(second) == 0
+    assert len([e for e in ledger.active(FRICTION_KIND)]) == 1
+
+
+def test_harvest_catches_a_dry_streak_once_per_question(ledger, ground):
+    from trellis.curiosity import QuestionLog, Question, assumption_key
+    from datetime import timedelta
+    ql = QuestionLog(ledger, ground)
+    ql.ask(Question("q title", "the funder is aligned", "a statement", "witness",
+                    ground.now() + timedelta(days=2)), "witness")
+    ak = assumption_key("the funder is aligned")
+    ql.record_seek(ak, "searched", map_changed=False, delta_refs=[], author="witness")
+    ql.record_seek(ak, "searched again", map_changed=False, delta_refs=[], author="witness")
+    h = ConfusionHarvest(ledger, "witness", ground)
+    burns = h.harvest(dry_streak_threshold=2)
+    dry = [b for b in burns if b.body["stumble"] == "dry_streak"]
+    assert len(dry) == 1 and dry[0].body["assumption_key"] == ak
+    assert h.harvest(dry_streak_threshold=2) == []        # once per assumption
+
+
+def test_performed_confusion_is_refused(ledger, ground):
+    h = ConfusionHarvest(ledger, "witness", ground)
+    from trellis.selfimprove import Burn
+    with pytest.raises(PerformedConfusionError):
+        h._record(Burn("I feel afraid and inadequate about being forgotten", "x", "protocol_violation"),
+                  "witness")
+
+
+def test_recurring_burns_surface_as_proposal_candidates(ledger, ground):
+    for i in range(2):
+        ledger.append("loop_run_end", "witness",
+                      {"run_id": f"r{i}", "outcome": "protocol_violation"})
+    h = ConfusionHarvest(ledger, "witness", ground)
+    h.harvest()
+    rec = h.recurring_burns(min_count=2)
+    assert any(r["stumble"] == "protocol_violation" and r["count"] == 2 for r in rec)
+
+
+def test_harvested_friction_reaches_the_prompt_within_budget(ledger, ground):
+    """The loop closes: a burn recorded today is read by tomorrow's standing
+    prompt (bounded, never blowing the 1,200-token budget)."""
+    from trellis.emp import EMP
+    from trellis.prompt import assemble_prompt, estimate_tokens, PROMPT_TOKEN_BUDGET
+    from trellis.surfaces import ConversationKey, Surface
+    ledger.append("loop_run_end", "witness", {"run_id": "r1", "outcome": "protocol_violation"})
+    h = ConfusionHarvest(ledger, "witness", ground)
+    h.harvest()
+    burns = h.harvested_friction()
+    emp = EMP(name="witness", ends=["read the room"], means=["files"],
+              principles=["say no when needed"], authored_by="alex")
+    key = ConversationKey(agent="witness", surface=Surface.CHANNEL, scope="chiefs", human="")
+    prompt = assemble_prompt(emp, ground, key, recent_burns=burns)
+    assert "Recent burns" in prompt and "protocol_violation" in prompt
+    assert estimate_tokens(prompt) <= PROMPT_TOKEN_BUDGET

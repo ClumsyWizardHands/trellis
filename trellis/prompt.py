@@ -58,12 +58,21 @@ def assemble_prompt(
     loop_health: Optional[list[dict]] = None,
     waiting_passes: int = 0,
     hidden_nos: int = 0,
+    recent_burns: Optional[list[str]] = None,
     budget: int = PROMPT_TOKEN_BUDGET,
 ) -> str:
     now = ground.now()
     parts: list[str] = []
 
     parts.append(emp.kernel())
+    # Harvested friction (selfimprove.ConfusionHarvest): the agent dies, but its
+    # stumbles survive on the record — tomorrow's session reads today's burns so
+    # it does not relearn them cold. Bounded (few, short) so it can't crowd the
+    # budget; functional, never performed (dread-linted at write time).
+    if recent_burns:
+        shown = [b[:140] for b in recent_burns[:4]]
+        parts.append("## Recent burns (harvested from my own record — do not repeat)\n"
+                     + "\n".join(f"- {b}" for b in shown))
     parts.append(
         f"## Clock (harness-injected; you cannot tell time — this line can)\n"
         f"now: {now.isoformat()} ({now.strftime('%A')}) · "

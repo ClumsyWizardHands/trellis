@@ -38,6 +38,7 @@ from typing import Optional
 
 from .clock import TimeGround
 from .decisions import question_key
+from .emp import lint_identity
 from .identity import is_effectively_blank, same_identity
 from .ledger import Entry, Ledger
 from .verify import (CompletionClaim, Evidence, EvidenceKind, Verifier,
@@ -320,3 +321,138 @@ class ImprovementEngine:
         """Proposals awaiting the human — verified-or-not, not yet ratified/denied."""
         return [e for e in self.ledger.active(PROPOSAL_KIND)
                 if e.body.get("disposition") != "Y"]
+
+
+# ----- the confusion harvest ("where did I get confused today?") -------------
+
+FRICTION_KIND = "friction"
+
+
+class PerformedConfusionError(Exception):
+    """A friction entry that performs feeling ("I feel inadequate") instead of
+    recording a functional burn ("I mis-dated a call; the read lacked a calendar
+    check"). Confusion is a fact with a source ref, not the soul leaking back in
+    through the mortality door (D13)."""
+
+
+@dataclass
+class Burn:
+    """One recorded stumble: a functional description + the ledger entry that IS
+    the stumble (so it is grounded and openable, never a free-floating feeling)."""
+    text: str
+    source_ref: str
+    kind: str          # protocol_violation | run_failed | self_refuted | human_correction | dry_streak
+
+
+class ConfusionHarvest:
+    """Turns the agent's OWN stumbles into attributed, dread-linted friction the
+    next prompt reads — 'the agent dies; the burns survive on the record.' This is
+    observation (like observe.py), not self-change: it records what demonstrably
+    happened, grounded in a real ledger entry. Proposing a behavioural CHANGE from
+    a recurring burn is a separate, D23-gated ImprovementProposal.
+
+    Idempotent: a stumble is recorded once (folded on its source ref / assumption),
+    so re-running the harvest never double-counts a burn."""
+
+    def __init__(self, ledger: Ledger, agent_id: str = "witness",
+                 ground: Optional[TimeGround] = None):
+        self.ledger = ledger
+        self.agent_id = agent_id
+        self.ground = ground or ledger.ground
+
+    def _recorded_refs(self) -> set:
+        return {e.body.get("source_ref") for e in self.ledger.active(FRICTION_KIND)}
+
+    def _recorded_dry_akeys(self) -> set:
+        return {e.body.get("assumption_key") for e in self.ledger.active(FRICTION_KIND)
+                if e.body.get("stumble") == "dry_streak" and e.body.get("assumption_key")}
+
+    def _record(self, burn: Burn, author: str, extra: Optional[dict] = None) -> Entry:
+        # dread + embodiment lint: a burn is functional, never a performed feeling.
+        viol = lint_identity(burn.text)
+        if viol:
+            raise PerformedConfusionError(
+                f"friction entry performs feeling instead of recording a burn: "
+                f"{[v.label for v in viol]}. State the functional stumble.")
+        body = {"burn": burn.text, "source_ref": burn.source_ref, "stumble": burn.kind}
+        if extra:
+            body.update(extra)
+        return self.ledger.append(FRICTION_KIND, author, body,
+                                  tags=("friction", burn.kind))
+
+    def _stumble_for(self, e: Entry) -> Optional[Burn]:
+        if e.kind == "loop_run_end":
+            outcome = e.body.get("outcome")
+            if outcome == "protocol_violation":
+                return Burn("a loop of mine ended without reporting an outcome — the "
+                            "harness recorded a protocol_violation; I must leave a typed "
+                            "outcome even when I fail", e.id, "protocol_violation")
+            if outcome == "failed":
+                return Burn(f"a loop of mine failed ({e.body.get('reason', 'no reason given')}) "
+                            "— worth a standing check so it does not recur", e.id, "run_failed")
+        if (e.kind == "verification" and e.body.get("status") == "refuted"
+                and same_identity(e.body.get("maker", ""), self.agent_id)):
+            return Burn("a completion I claimed was refuted by an independent check — the "
+                        "evidence did not hold; I claimed done before it was", e.id, "self_refuted")
+        if e.supersedes and not same_identity(e.author, self.agent_id):
+            old = self.ledger.get(e.supersedes)
+            if old is not None and same_identity(old.author, self.agent_id):
+                return Burn(f"a human corrected something I recorded (a {e.kind}); my version "
+                            "was superseded — a signal my read was off", e.id, "human_correction")
+        return None
+
+    def harvest(self, author: Optional[str] = None, dry_streak_threshold: int = 2) -> list:
+        """Scan the record for the agent's own stumbles and record each once, as
+        functional friction. Returns the newly recorded friction entries."""
+        author = author or self.agent_id
+        already = self._recorded_refs()
+        recorded = []
+        for e in self.ledger.entries():
+            if e.id in already or e.kind == FRICTION_KIND:
+                continue
+            burn = self._stumble_for(e)
+            if burn is not None:
+                recorded.append(self._record(burn, author))
+                already.add(e.id)
+        recorded += self._harvest_dry_streaks(author, dry_streak_threshold)
+        return recorded
+
+    def _harvest_dry_streaks(self, author: str, threshold: int) -> list:
+        """A run of dry seeks on one question — the agent kept looking and nothing
+        moved — is a burn (recorded once per assumption, not once per seek)."""
+        from .curiosity import SEEK_KIND, QuestionLog
+        seeks_by_akey: dict = {}
+        for e in self.ledger.entries():
+            if e.kind == SEEK_KIND and e.body.get("assumption_key"):
+                seeks_by_akey.setdefault(e.body["assumption_key"], []).append(e)
+        done = self._recorded_dry_akeys()
+        ql = QuestionLog(self.ledger, self.ground)
+        out = []
+        for akey, seeks in seeks_by_akey.items():
+            if akey in done:
+                continue
+            if ql.dry_streak(akey) >= threshold:
+                latest = max(seeks, key=lambda x: x.stamp.write_time)
+                burn = Burn("I keep searching one question and nothing moves — a dry streak; "
+                            "this is a signal to escalate to a human, not to declare victory",
+                            latest.id, "dry_streak")
+                out.append(self._record(burn, author, extra={"assumption_key": akey}))
+                done.add(akey)
+        return out
+
+    def harvested_friction(self, n: int = 5) -> list:
+        """The active burns, most recent first — what the next prompt should read
+        so tomorrow's session stands on today's stumbles."""
+        burns = [(e.stamp.write_time, e.body.get("burn", ""))
+                 for e in self.ledger.active(FRICTION_KIND)]
+        burns.sort(key=lambda b: b[0], reverse=True)
+        return [text for _, text in burns[:n] if text]
+
+    def recurring_burns(self, min_count: int = 2) -> list:
+        """Stumble KINDS that recur — candidates for a D23 ImprovementProposal
+        (the harvest records the burn; changing behaviour is a gated proposal)."""
+        counts: dict = {}
+        for e in self.ledger.active(FRICTION_KIND):
+            k = e.body.get("stumble", "?")
+            counts[k] = counts.get(k, 0) + 1
+        return [{"stumble": k, "count": c} for k, c in counts.items() if c >= min_count]
