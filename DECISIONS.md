@@ -517,6 +517,41 @@ understand."
 
 ---
 
+## D23 — The agent proposes its own repair; it never applies it ✅ fresh
+
+**Decision:** the self-improvement engine lets the agent **continuously propose** changes
+to itself — a burn to record in the friction register, a process to change, a skill to
+adopt or retire — but a proposal **cannot take effect** without (a) an *independent*
+verified verdict on the record (maker ≠ verifier) **and** (b) a *human's* ratification.
+The agent's capabilities are a navigable **skill estate** (00-grade titles, anti-forked on
+a `capability_key`), so "is there already a skill for this?" dedups before a duplicate is
+minted. Adopting a skill from an **untrusted source** (e.g. a video) is a **default-N**
+decision that must state its supply-chain reasoning — the human installs, the agent never
+auto-installs. "Recursively improve itself all the time" means *think about it always,
+change yourself never without the two gates*.
+
+**Triangulation:**
+1. Alex, 2026-07-20 (the commission): *"infrastructure and a process for the agent to
+   constantly think about ways to improve itself … Could this be a skill? Is there already
+   a skill? Where did I get confused today? … Recursively improve itself all the time."*
+2. D18 (the reflection ritual is a verifier-gated producer): the engine **reuses** that
+   exact safety core — `apply`-behind-an-independent-verdict — so it adds no new authority
+   for the agent over itself; it can be no more dangerous than `reflect.apply_self_change`,
+   which rounds 6 already hardened.
+3. W1 (no skill marketplace / no auto-installed skills) + Brett 2026-07-11 (*"don't trust
+   AI to write skills"*) + the OpenClaw supply-chain record (824 malicious skills): an
+   external skill:add is structurally a default-N with a forced "why," never a fetch-and-run.
+4. D4 (maker ≠ verifier) + the ASCII-identity allowlist hardened 2026-07-17: the proposal's
+   evidence is confirmed by a checker that is not the maker, and self/​homoglyph ratification
+   is refused — the human seat holds on the improvement surface too.
+
+**Consequence:** `trellis/selfimprove.py` (`SkillEstate`, `ImprovementProposal`,
+`ImprovementEngine`). `can_take_effect()` re-derives both gates from the append-only record,
+never from a proposal's own flag. Plan: `docs/PLAN-self-improvement-engine.md` (Phase 1
+built; confusion harvest, the improvement-curiosity loop, and the portal surface follow).
+
+---
+
 ## ⏳ Watch list (decisions deliberately NOT taken)
 
 - **W1 — No skill marketplace / no auto-installed skills.** [OPENCLAW] supply-chain
