@@ -65,6 +65,12 @@ class LoopBudgetExceeded(Exception):
     pass
 
 
+class OutcomePersistenceError(Exception):
+    """The loop finished but its outcome could not be written to the ledger. We
+    refuse to report success on an unrecorded run — silence is the cardinal sin,
+    even (especially) when the store itself is down (Codex High 5)."""
+
+
 @dataclass
 class LoopSpec:
     name: str
@@ -191,6 +197,7 @@ class LoopRun:
                               "that says nothing is a loop that failed silently",
                 })
         # last resort: even record_end must not be able to swallow the write.
+        persisted = True
         try:
             self.registry.record_end(self, self._outcome, self._detail)
         except BaseException:
@@ -198,8 +205,48 @@ class LoopRun:
                 self.registry.record_end(self, Outcome.PROTOCOL_VIOLATION,
                                          {"reason": "record_end degraded"})
             except BaseException:
-                pass  # we tried every way to be loud; never mask the original exc
+                # BOTH writes failed — the audit record could not be persisted.
+                # Codex High 5: the old code `pass`ed here and returned normally,
+                # so a loop that finished would report SUCCESS with no durable
+                # outcome — a silent unrecorded completion, the exact cardinal sin.
+                # Never return success when the record could not be written: emit
+                # to an independent emergency sink, then FAIL LOUD.
+                persisted = False
+                self._emergency_sink()
+        # If we could not persist AND the body did not already raise, raise a
+        # dedicated fatal error so the caller becomes unhealthy instead of
+        # believing it succeeded. If the body DID raise, let that propagate
+        # (return False) — we've already emitted the outcome to the sink.
+        if not persisted and exc is None:
+            raise OutcomePersistenceError(
+                f"loop {self.spec.name} run {self.run_id} finished as "
+                f"{(self._outcome.value if self._outcome else '?')} but its outcome "
+                "could not be written to the ledger — refusing to report success on "
+                "an unrecorded run (see the .emergency sink)")
         return False  # never swallow the exception; loud beats tidy
+
+    def _emergency_sink(self) -> None:
+        """When the ledger is unwritable, do not lose the outcome silently: append
+        it to a sidecar `<ledger>.emergency` file and shout on stderr. Best-effort
+        and defensive — even this must never raise and mask the real failure."""
+        import json
+        import sys
+        rec = {"run_id": self.run_id, "loop": self.spec.name,
+               "outcome": self._outcome.value if self._outcome else "unknown",
+               "detail": {k: str(v)[:500] for k, v in (self._detail or {}).items()},
+               "note": "LEDGER UNWRITABLE — outcome persisted to emergency sink"}
+        line = json.dumps(rec, default=str)
+        try:
+            print("TRELLIS OUTCOME PERSISTENCE FAILURE:", line, file=sys.stderr, flush=True)
+        except BaseException:
+            pass
+        try:
+            path = getattr(self.registry.ledger, "path", None)
+            if path is not None:
+                with open(str(path) + ".emergency", "a", encoding="utf-8") as f:
+                    f.write(line + "\n")
+        except BaseException:
+            pass  # we tried every independent way to be loud; never mask the original
 
 
 class LoopRegistry:

@@ -2,6 +2,8 @@
 unverifiable completion. Loops always end in a typed outcome; makers never
 verify themselves; claims carry openable evidence."""
 
+import os
+
 import pytest
 
 from trellis.loops import (BlockKind, LoopBudgetExceeded, LoopRegistry, LoopRun,
@@ -167,3 +169,28 @@ def test_trust_compounds_in_the_ledger(ledger, tmp_path):
     assert tr["verified"] == 1               # only the real outcome check
     assert tr["refuted"] == 1
     assert tr["verified_ratio"] == 0.2       # 1 of 5, not 4 of 5
+
+
+def test_unwritable_ledger_fails_loud_not_silent(ledger, tmp_path):
+    """Codex High 5: if the outcome can't be written, a finished loop must NOT
+    report success — it raises OutcomePersistenceError and emits to a sidecar
+    emergency sink. Silence is the cardinal sin even when the store is down."""
+    from trellis.loops import (LoopRegistry, LoopRun, LoopSpec,
+                              OutcomePersistenceError)
+    reg = LoopRegistry(ledger)
+    # make every ledger write fail (simulate the store being down)
+    def boom(*a, **k):
+        raise OSError("disk full")
+    reg.record_end = boom
+    spec = LoopSpec("x.loop", "p", "k", max_turns=3, stop_condition="done")
+    raised = False
+    try:
+        with LoopRun(spec, reg, actor="witness") as run:
+            run.tick()
+            run.ok("did the thing", evidence=[])   # a normal, successful finish
+    except OutcomePersistenceError:
+        raised = True
+    assert raised, "a finished loop whose outcome can't persist must fail loud"
+    # the outcome is not lost: it lands in the emergency sidecar
+    sink = str(ledger.path) + ".emergency"
+    assert os.path.exists(sink) and "x.loop" in open(sink).read()
