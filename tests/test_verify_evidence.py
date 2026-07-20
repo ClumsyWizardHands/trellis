@@ -80,3 +80,15 @@ def test_missing_file_still_refutes(ledger, tmp_path):
     v = RuleVerifier("checker:1", ledger).verify(
         _claim([Evidence(EvidenceKind.FILE, str(tmp_path / "nope.md"))]))
     assert v.status == VerdictStatus.REFUTED
+
+
+def test_trivial_empty_predicate_is_refused_not_a_false_verified(ledger, tmp_path):
+    """An empty expect_contains matches everything — it would launder existence
+    into VERIFIED. Refused at construction, so it can't become a fake outcome check."""
+    f = tmp_path / "r.md"; f.write_text("anything")
+    with pytest.raises(ValueError):
+        Evidence(EvidenceKind.FILE, str(f), expect_contains="")
+    with pytest.raises(ValueError):
+        Evidence(EvidenceKind.FILE, str(f), expect_contains="   ")
+    with pytest.raises(ValueError):
+        Evidence(EvidenceKind.LEDGER, "x", expect_kind="")

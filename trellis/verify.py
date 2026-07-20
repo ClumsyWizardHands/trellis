@@ -63,6 +63,20 @@ class Evidence:
     expect_contains: Optional[str] = None  # FILE/LEDGER: body must contain this substring
     expect_kind: Optional[str] = None      # LEDGER: the entry must be of this kind
 
+    def __post_init__(self):
+        # A TRIVIAL predicate is not an outcome check. An empty/whitespace-only
+        # `expect_contains` ('' is a substring of everything) or a blank
+        # `expect_hash`/`expect_kind` would launder existence into VERIFIED, so
+        # they are refused at construction — a predicate must actually assert
+        # something checkable.
+        if self.expect_contains is not None and not self.expect_contains.strip():
+            raise ValueError("expect_contains must be a non-empty substring — an "
+                             "empty predicate matches everything and is not an outcome check")
+        if self.expect_hash is not None and not self.expect_hash.strip():
+            raise ValueError("expect_hash must be a real sha256, not blank")
+        if self.expect_kind is not None and not self.expect_kind.strip():
+            raise ValueError("expect_kind must name a real ledger kind, not blank")
+
     def has_predicate(self) -> bool:
         return bool(self.expect_hash or self.expect_contains or self.expect_kind)
 
