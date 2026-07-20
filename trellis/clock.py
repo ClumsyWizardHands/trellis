@@ -45,10 +45,17 @@ def parse_iso(s: str) -> datetime:
 
 
 class Staleness(str, Enum):
+    FUTURE = "future"    # event_time is AHEAD of now (clock skew or fabrication) —
+                         # quarantine, do NOT treat as maximally fresh (Codex High 9)
     FRESH = "fresh"      # freshness >= 0.5  (younger than one half-life)
     AGING = "aging"      # 0.25 <= f < 0.5
     STALE = "stale"      # 0.05 <= f < 0.25
     EXPIRED = "expired"  # f < 0.05 — do not treat as current under any framing
+
+
+#: Tolerance for clock jitter before an event counts as "from the future". A few
+#: minutes of skew between machines is normal; a day ahead is a signal, not fresh.
+FUTURE_SKEW_TOLERANCE = timedelta(minutes=5)
 
 
 #: Volatility classes → half-lives. How fast does this kind of fact rot?
@@ -116,6 +123,11 @@ class TimeGround:
         return 0.5 ** (age.total_seconds() / half_life.total_seconds())
 
     def staleness(self, event_time: datetime, volatility: str = "fact") -> Staleness:
+        # FUTURE first: an event dated ahead of now is clock skew or fabrication.
+        # The old code let it fall through to freshness=1.0 → FRESH, so a message
+        # dated 30 days out read as maximally current (Codex High 9). Quarantine it.
+        if self._elapsed(event_time) < -FUTURE_SKEW_TOLERANCE:
+            return Staleness.FUTURE
         f = self.freshness(event_time, volatility)
         if f >= 0.5:
             return Staleness.FRESH
@@ -147,6 +159,12 @@ class TimeGround:
         """Render age INTO what the model reads. A time-blind reader should
         still be unable to mistake April for July."""
         s = self.staleness(event_time, volatility)
+        # A FUTURE item is flagged loudly so a time-blind reader cannot treat it as
+        # current — it is a clock-skew / fabrication signal, not fresh evidence.
+        if s == Staleness.FUTURE:
+            tag = f"[FUTURE · dated {self.age_phrase(event_time)} · {event_time.date().isoformat()} · "
+            tag += "clock skew or fabrication — do NOT treat as current]"
+            return f"{tag} {text}"
         tag = f"[{s.value} · {self.age_phrase(event_time)} · {event_time.date().isoformat()}]"
         return f"{tag} {text}"
 

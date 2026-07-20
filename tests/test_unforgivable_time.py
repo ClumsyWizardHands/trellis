@@ -81,3 +81,18 @@ def test_heartbeat_due_respects_active_hours(ground, clock):
     clock.t = clock.t.replace(hour=9)
     assert s.due(ground) is True
     assert HEARTBEAT_OK == "HEARTBEAT_OK"
+
+
+def test_future_dated_data_is_quarantined_not_fresh(ground, clock):
+    """Codex High 9: an event dated ahead of now is clock skew or fabrication —
+    it must NOT read as maximally fresh/current."""
+    from trellis.clock import Staleness
+    from datetime import timedelta
+    future = clock.t + timedelta(days=30)
+    assert ground.staleness(future, "conversation") == Staleness.FUTURE
+    text = ground.annotate("the funder already wired the money", future, "conversation")
+    assert "FUTURE" in text and "fresh" not in text.lower()
+    assert "do NOT treat as current" in text
+    # a few minutes of clock jitter is tolerated, not quarantined
+    jitter = clock.t + timedelta(minutes=2)
+    assert ground.staleness(jitter, "conversation") == Staleness.FRESH
