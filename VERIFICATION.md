@@ -5,7 +5,7 @@ is not an audit.** Three layers, in order of increasing independence.
 
 ## Layer 1 — deterministic suite (the floor)
 
-`python3 -m pytest` — **222 tests**, structured as the acceptance checklist from
+`python3 -m pytest` — **the acceptance suite** (current count on the CI badge), structured as the acceptance checklist from
 the baby EMP (see ACCEPTANCE.md: the ten unforgivables mapped to named tests).
 Zero network, zero API keys, deterministic clock — a time bug cannot hide
 behind a real clock.
