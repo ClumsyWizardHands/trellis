@@ -66,8 +66,10 @@ def _hue_for_trust(trust: Optional[float]) -> tuple[str, str, str]:
     return hx(base), hx(accent), hx(darkbg)
 
 
-def render_glyph(stats: GlyphStats, size: int = 240) -> str:
-    """Return a self-contained SVG string. Deterministic in `stats`."""
+def render_glyph(stats: GlyphStats, size: int = 240, background: bool = True) -> str:
+    """Return a self-contained SVG string. Deterministic in `stats`. Pass
+    background=False to omit the panel rect, so the creature can be LAYERED (a
+    self-portrait morph draws yesterday's creature faintly behind today's)."""
     cx = cy = size / 2
     # BODY SIZE ← total activity (log so it grows fast then settles)
     activity = stats.entries
@@ -89,7 +91,8 @@ def render_glyph(stats: GlyphStats, size: int = 240) -> str:
     parts: list[str] = []
     parts.append(f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {size} {size}" '
                  f'role="img" aria-label="trellis self-image glyph">')
-    parts.append(f'<rect width="{size}" height="{size}" rx="18" fill="{darkbg}"/>')
+    if background:
+        parts.append(f'<rect width="{size}" height="{size}" rx="18" fill="{darkbg}"/>')
 
     # tail rings behind the body (age)
     for i in range(rings):

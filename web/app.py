@@ -276,6 +276,38 @@ def _decision_walk_body(led: Ledger, decision_id: str) -> str:
     return "".join(out)
 
 
+def _self_portrait_panel(led: Ledger) -> str:
+    """The daily self-portrait that builds on the previous day: a morph from
+    yesterday's snapshot to today's, the growth strip of the whole chain, and an
+    honest delta caption. Every trait is a deterministic function of the ledger
+    snapshots the reflection ritual writes — it builds on yesterday, it never
+    performs a self."""
+    from .selfportrait import (portrait_delta, render_growth_strip, render_morph,
+                              render_self_portrait, snapshot_series)
+    series = snapshot_series(led)
+    if not series:
+        return ""
+    today = series[-1][1]
+    prev = series[-2][1] if len(series) >= 2 else None
+    art = render_morph(prev, today, size=200) if prev is not None \
+        else render_self_portrait(today, None, size=200)
+    delta = portrait_delta(prev, today)
+    out = ['<div class="panel"><h3>Daily self-portrait — built on yesterday</h3>'
+           '<div class="mirror">']
+    out.append(f'<div class="glyphbox">{art}'
+               '<div class="cap">yesterday → today (the change you see is the change '
+               'in the record)</div></div>')
+    out.append('<div><div class="legend">This portrait is a deterministic morph of '
+               'two real self-image snapshots — it grows out of the previous day, and '
+               'changes only because the record changed. It is not a mood.</div>')
+    out.append('<ul class="feed">' + "".join(
+        f'<li><span>{esc(x)}</span></li>' for x in delta) + '</ul></div></div>')
+    if len(series) >= 2:
+        out.append(f'<div style="margin-top:14px;overflow-x:auto">{render_growth_strip(series)}</div>')
+    out.append('</div>')
+    return "".join(out)
+
+
 def _reflection_body(led: Ledger) -> str:
     r = views.reflection_view(led)
     stats = views.growth_stats(led)
@@ -284,6 +316,7 @@ def _reflection_body(led: Ledger) -> str:
                      "Once a day the agent looks at itself in the mirror of its own record — "
                      "grounded, cited, and honest. It is a data-visualisation of real numbers, "
                      "never a claim to a self.")]
+    out.append(_self_portrait_panel(led))
     if r is None:
         out.append('<div class="panel"><div class="mirror">')
         out.append(f'<div class="glyphbox">{render_glyph(gs, size=200)}'
