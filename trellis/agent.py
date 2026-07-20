@@ -109,6 +109,12 @@ class Witness:
         # The verifier is a DIFFERENT identity by construction:
         self.verifier = verifier or RuleVerifier(f"rule-verifier:{emp.name.lower()}-check",
                                                  ledger=ledger, ground=self.ground)
+        # Reload-the-read compiler + confusion harvest, so an opinion is formed over
+        # reconstructed longitudinal state and yesterday's burns, not the batch alone.
+        from .context import ContextCompiler
+        from .selfimprove import ConfusionHarvest
+        self.compiler = ContextCompiler(ledger, self.ground, self.decisions)
+        self.harvest = ConfusionHarvest(ledger, self.id, self.ground)
 
     # ----- the working loop --------------------------------------------------
 
@@ -131,8 +137,9 @@ class Witness:
             if not run.tick():
                 return Outcome.BUDGET_EXCEEDED
 
-            # RESOLVE — ask the model for opinions in the Y/N/T grammar
-            opinions = self._resolve(sensed, run)
+            # RESOLVE — ask the model for opinions in the Y/N/T grammar, over a
+            # COMPILED context (prior read + relevant history), not the batch alone
+            opinions = self._resolve(sensed, run, subjects=[e.content for e in events])
 
             # ACT — record decisions; stage (never fire) anything outbound
             recorded = []
@@ -170,15 +177,34 @@ class Witness:
 
     # ----- pieces -------------------------------------------------------------
 
-    def _resolve(self, sensed: list[str], run: LoopRun) -> list[Opinion]:
+    def _resolve(self, sensed: list[str], run: LoopRun,
+                 subjects: Optional[list[str]] = None) -> list[Opinion]:
+        # Harvested burns ride the standing prompt (friction); the COMPILED context
+        # (prior read + obligations + corrections + relevant decisions) rides the
+        # user message, so the opinion is formed over reconstructed longitudinal
+        # state, not the current batch alone (the context-engineering audit's gap).
+        burns = self.harvest.harvested_friction() if getattr(self, "harvest", None) else None
         system = assemble_prompt(
             self.emp, self.ground, self.key,
             workspace_map=self.workspace.map(),
             loop_health=self.loops.health_report(),
             waiting_passes=len(self.exchange.inbox(self.id)) if self.exchange else 0,
             hidden_nos=len(self.decisions.open_questions()),
+            recent_burns=burns,
         )
-        user = ("Events on your surface (age-tagged; newer supersedes older):\n"
+        compiled_block = ""
+        if subjects and getattr(self, "compiler", None) is not None:
+            compiled = self.compiler.compile(subjects=subjects,
+                                             surface_key=self.key.storage_key(),
+                                             budget_tokens=600)
+            # record the manifest — what the model saw and did NOT see, auditable
+            self.ledger.append("context_manifest", self.id, compiled.manifest.to_dict(),
+                               tags=("context", "manifest"))
+            block = compiled.to_prompt_block()
+            if block:
+                compiled_block = block + "\n\n"
+        user = (compiled_block
+                + "Events on your surface (age-tagged; newer supersedes older):\n"
                 + "\n".join(sensed) + "\n\n" + OPINION_INSTRUCTIONS)
         messages = [{"role": "user", "content": user}]
 

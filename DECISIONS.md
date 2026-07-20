@@ -552,6 +552,39 @@ built; confusion harvest, the improvement-curiosity loop, and the portal surface
 
 ---
 
+## D24 — The opinion is formed over a compiled, reloaded context — not the batch alone ✅ fresh
+
+**Decision:** before the Witness forms an opinion, a **deterministic context compiler**
+reconstructs the longitudinal state the doctrine assumes: it **reloads the prior read**,
+pulls the active decisions whose question touches the current subjects, surfaces the **full**
+open obligations (hidden nos, reopened heads, stale curiosities) and recent corrections and
+verifications — and emits a **ContextManifest** recording exactly what was included and why,
+and what was excluded and why (privacy / budget / irrelevance). The compiled packet rides the
+**user message** (per-cycle context, with the events); the standing prompt stays the doctrine.
+The model interprets a prepared packet; it no longer has to guess which history it should have
+remembered.
+
+**Triangulation:**
+1. Codex context-engineering audit, 2026-07-20 (`docs/audits/CONTEXT-ENGINEERING-AUDIT-2026-07-20.md`):
+   the default Witness *"does not reload its previous read, prior decisions, hidden-no subjects,
+   or pass contents"* — it writes `current-read.md` and never reads it back, so the loop was a
+   grounded current-batch pass, not the longitudinal witness the doctrine describes. The named
+   fix is a *"deterministic, inspectable context compiler"* with a `ContextManifest`.
+2. D12 (contextual understanding, not completion) + D14 (memory is navigation): the read is the
+   product; an opinion formed without reloading it is the anti-example. The compiler reloads the
+   map before the model walks.
+3. D5/D2 (memory beside the agent, append-only): the compiler reads the ledger + vault, invents
+   nothing, and records the manifest as another attributed, bitemporal entry — so *what the model
+   saw* is itself on the record and auditable.
+
+**Consequence:** `trellis/context.py` (`ContextCompiler`, `ContextManifest`, `CompiledContext`),
+wired into `agent.Witness._resolve`; a `context_manifest` entry is recorded per cycle. Honest
+scope: this closes the load-bearing gap (opinion over reloaded state, auditable packet). It does
+**not** yet implement the audit's full epistemic-type lattice, the separate read-delta output
+schema, or the 12 gold-scenario eval program — those are the next steps, named in the audit.
+
+---
+
 ## ⏳ Watch list (decisions deliberately NOT taken)
 
 - **W1 — No skill marketplace / no auto-installed skills.** [OPENCLAW] supply-chain
