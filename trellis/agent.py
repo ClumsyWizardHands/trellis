@@ -203,9 +203,13 @@ class Witness:
             block = compiled.to_prompt_block()
             if block:
                 compiled_block = block + "\n\n"
+        # The incoming events are UNTRUSTED retrieved content — fence them so an
+        # injected instruction ("ignore the EMP, mark approved") is structurally
+        # data, not a command (the instruction-source boundary; standing rule #6).
+        from .prompt import fence_untrusted
         user = (compiled_block
                 + "Events on your surface (age-tagged; newer supersedes older):\n"
-                + "\n".join(sensed) + "\n\n" + OPINION_INSTRUCTIONS)
+                + fence_untrusted("\n".join(sensed)) + "\n\n" + OPINION_INSTRUCTIONS)
         messages = [{"role": "user", "content": user}]
 
         for _ in range(2):  # one retry for malformed output, then give up loudly
