@@ -218,11 +218,26 @@ dossier and baby EMP compiled 2026-07-15. That document says what the team canno
 forgive an agent for getting wrong. This repository is those unforgivables turned
 into type errors.
 
+### Install it on your machine (clone or unzip — no git required)
+
 ```
-pip install -e .            # zero runtime dependencies in the core
+pip install -e .     # zero-dependency core
+trellis init         # scaffold .env (+ a generated portal secret) and state/
+trellis doctor       # honest readiness check: what's configured, what's reachable
+trellis demo         # a full witness cycle, offline, no accounts
+```
+
+Then pick a model seat (`TRELLIS_PROVIDER` = `local` for Gemma/Ollama, `openai`, or
+`claude`), point it at your own surfaces (Obsidian vault, your own Discord bot), and
+re-run `trellis doctor`. A fresh install is **inert** — it touches nothing but the
+offline demo until you configure a surface. Full walkthrough (and a section for AI
+assistants setting it up): **[docs/SETUP.md](docs/SETUP.md)**.
+
+For development:
+
+```
 python3 -m pytest           # the acceptance suite — live count on the CI badge above
 python3 stress/stress_test.py   # 10 adversarial scenarios, evidence-logged
-python3 examples/run_witness.py # a full witness cycle, offline, no API key
 ```
 
 ---
