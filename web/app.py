@@ -79,6 +79,7 @@ NAV = [
     ("/ingestion", "Ingestion", "what's been taken in and understood — coverage and gaps"),
     ("/decisions", "Decisions", "every Yes / No / Triangulate — click one to walk its reasoning"),
     ("/reflection", "Reflection", "once a day, the agent looks at itself in the mirror of its record"),
+    ("/improvement", "Improvement", "how it wants to get better at its own job — proposals you ratify"),
     ("/loops", "Loops", "the background jobs, and whether each is healthy or needs a look"),
     ("/verification", "Verification", "the maker never grades its own work — who checked whom"),
     ("/agents", "Agents", "who is on the record, and how much they've been independently verified"),
@@ -656,15 +657,19 @@ def login_form(request: Request):
 
 
 @app.post("/login")
-def login(token: str = Form(...)):
+def login(request: Request, token: str = Form(...)):
     from trellis.auth import AuthError
     try:
         principal = _AUTH.authenticate(token)
     except AuthError:
         raise HTTPException(status_code=401, detail="invalid approver token")
     resp = RedirectResponse("/", status_code=303)
+    # Secure only when actually served over TLS — setting it on plaintext localhost
+    # would stop the cookie being stored at all. HttpOnly + SameSite=strict always.
+    over_tls = request.url.scheme == "https"
     resp.set_cookie(SESSION_COOKIE, _AUTH.issue_session(principal),
-                    httponly=True, samesite="strict", max_age=_AUTH.SESSION_TTL)
+                    httponly=True, samesite="strict", secure=over_tls,
+                    max_age=_AUTH.SESSION_TTL)
     return resp
 
 
@@ -705,6 +710,80 @@ def decision_detail(decision_id: str, frag: int = 0):
 @app.get("/reflection", response_class=HTMLResponse)
 def reflection_page(frag: int = 0):
     return _respond("/reflection", _reflection_body(_ledger()), bool(frag))
+
+
+def _improvement_body(led: Ledger) -> str:
+    v = views.improvement_view(led)
+    out = [_pagehead("Improvement",
+                     "How the agent wants to get better at its own job. It watches its own "
+                     "record for stumbles and proposes fixes — but it can never change itself "
+                     "alone: every proposal is independently verified and waits for your yes.")]
+    out.append(f'<div class="legend">It has recorded <b>{v["burns"]}</b> burn(s) about itself, '
+               f'and is nagging on <b>{len(v["questions"])}</b> open improvement question(s)'
+               + (f' — <span class="attn">{v["stale_count"]} overdue</span>' if v["stale_count"] else '')
+               + '. A question closes only when you ratify a fix; noticing a stumble is not improving.</div>')
+    # the improvement questions (staleness rail)
+    if v["questions"]:
+        out.append('<div class="panel"><h3>What it thinks it should change about how it works</h3>')
+        for q in v["questions"]:
+            pill = '<span class="pill hn">overdue</span> ' if q["stale"] else ''
+            out.append(f'<div class="row"><div>{pill}{esc(q["title"])}'
+                       f'<div class="muted small">assuming: {esc(q["assumption"])}</div></div></div>')
+        out.append('</div>')
+    # the proposals awaiting the human
+    out.append('<div class="panel"><h3>Proposed self-changes — your call</h3>')
+    if not v["proposals"]:
+        out.append('<div class="muted small">No proposals waiting. When the agent proposes a '
+                   'change to itself, it appears here for you to ratify or deny.</div>')
+    for p in v["proposals"]:
+        vpill = ('<span class="pill Y">independently verified</span>' if p["verified"]
+                 else f'<span class="pill hn">unverified ({esc(p["verdict"] or "—")})</span>')
+        w1 = (f' · <span class="pill T">external — default N</span>' if p["disposition"] == "N" else '')
+        sc = (f'<div class="muted small">supply-chain note: {esc(p["supply_chain"])}</div>'
+              if p["supply_chain"] else '')
+        out.append(f'<div class="row"><div><b>{esc(p["target"])}</b> {vpill}{w1}'
+                   f'<div>{esc(p["proposal"])}</div>'
+                   f'<div class="muted small">why: {esc(p["rationale"])} · source: {esc(p["source"])} '
+                   f'· evidence: {len(p["evidence"])} entr(y/ies)</div>{sc}</div>'
+                   f'<form method="post" action="/ratify" style="display:flex;gap:6px;align-items:center">'
+                   f'<input type="hidden" name="entry_id" value="{esc(p["entry_id"])}">'
+                   f'<button>ratify</button>'
+                   f'<button class="deny" formaction="/reject_improvement">deny</button></form></div>')
+    out.append('</div>')
+    return "".join(out)
+
+
+@app.get("/improvement", response_class=HTMLResponse)
+def improvement_page(frag: int = 0):
+    return _respond("/improvement", _improvement_body(_ledger()), bool(frag))
+
+
+@app.post("/ratify")
+def ratify(request: Request, entry_id: str = Form(...)):
+    from trellis.selfimprove import ImprovementEngine, UnverifiedProposalError
+    human = _require_human(request)
+    led = _ledger()
+    try:
+        ImprovementEngine(led, author="web").ratify(entry_id, human)
+    except (UnverifiedProposalError, ValueError) as e:
+        raise HTTPException(status_code=403, detail=str(e))
+    except KeyError:
+        raise HTTPException(status_code=404, detail="no such proposal")
+    return RedirectResponse("/improvement", status_code=303)
+
+
+@app.post("/reject_improvement")
+def reject_improvement(request: Request, entry_id: str = Form(...)):
+    from trellis.selfimprove import ImprovementEngine, UnverifiedProposalError
+    human = _require_human(request)
+    led = _ledger()
+    try:
+        ImprovementEngine(led, author="web").reject(entry_id, human, reason="declined in the portal")
+    except (UnverifiedProposalError, ValueError) as e:
+        raise HTTPException(status_code=403, detail=str(e))
+    except KeyError:
+        raise HTTPException(status_code=404, detail="no such proposal")
+    return RedirectResponse("/improvement", status_code=303)
 
 
 @app.get("/loops", response_class=HTMLResponse)

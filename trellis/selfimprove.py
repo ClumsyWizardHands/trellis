@@ -293,6 +293,24 @@ class ImprovementEngine:
             tags=("improve", e.body.get("target"), "ratified"),
             supersedes=e.id)
 
+    def reject(self, proposal_entry_id: str, human: str, reason: str = "") -> Entry:
+        """A HUMAN declines a proposal. Recorded (never deleted) so the trail keeps
+        the 'no'; the proposal drops out of the open queue. Independence-guarded
+        like ratify — the proposing agent cannot reject-and-move-on for the human."""
+        if is_effectively_blank(human):
+            raise ValueError("a rejection names the human who declined it")
+        e = self.ledger.get(proposal_entry_id)
+        if e is None or e.kind != PROPOSAL_KIND:
+            raise KeyError(f"no improvement_proposal {proposal_entry_id}")
+        if same_identity(human, e.author):
+            raise UnverifiedProposalError(
+                "the proposing agent cannot reject its own proposal for the human")
+        return self.ledger.append(
+            kind=PROPOSAL_KIND, author=human,
+            body={**e.body, "disposition": "N", "rejected_by": human, "reject_reason": reason},
+            tags=("improve", e.body.get("target"), "rejected"),
+            supersedes=e.id)
+
     def can_take_effect(self, proposal_entry_id: str) -> dict:
         """A proposal may take effect ONLY if the ledger carries (a) an independent
         verified verdict for its claim AND (b) a human ratification. Re-derived from

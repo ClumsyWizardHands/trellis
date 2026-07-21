@@ -237,3 +237,22 @@ def test_ingestion_status_counts_and_flags_machine(ledger, ground):
     s = views.ingestion_status(ledger, ground)
     assert s["items_ingested"] == 1 and s["machine_transcribed"] == 1
     assert s["observations"] == 1
+
+
+def test_improvement_view_surfaces_questions_and_proposals(ledger, ground):
+    from trellis.selfimprove import (ImprovementLoop, ImprovementEngine,
+                                    ImprovementProposal, ProposalTarget)
+    from trellis.verify import RuleVerifier
+    for i in range(2):
+        ledger.append("loop_run_end", "witness", {"run_id": f"r{i}", "outcome": "protocol_violation"})
+    ImprovementLoop(ledger, "witness", ground).run(min_count=2)
+    ev = [ledger.append("decision", "witness", {"decision_id": "d", "subject": "burn"}).id]
+    eng = ImprovementEngine(ledger, "witness",
+                            verifier=RuleVerifier("verifier:check", ledger=ledger, ground=ground), ground=ground)
+    eng.propose(ImprovementProposal(ProposalTarget.PROCESS, "write a typed outcome on failure",
+                                    "recurred", evidence_ids=ev))
+    v = views.improvement_view(ledger, ground)
+    assert v["burns"] >= 2
+    assert v["questions"] and "protocol_violation" in v["questions"][0]["assumption"]
+    assert v["proposals"] and v["proposals"][0]["verified"] is True
+    assert v["proposals"][0]["can_take_effect"] is False   # verified but not ratified yet

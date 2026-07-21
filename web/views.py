@@ -470,3 +470,49 @@ def ingestion_status(ledger: Ledger, ground: Optional[TimeGround] = None) -> dic
     observations = sum(1 for e in ledger.active("decision")
                        if str(e.author).startswith("observer:"))
     return {**cov, "observations": observations}
+
+
+def improvement_view(ledger: Ledger, ground: Optional[TimeGround] = None) -> dict:
+    """The self-improvement surface: the recurring stumbles the agent is flagging
+    about ITSELF (staleness-railed), and the self-change proposals awaiting the
+    human — each with its evidence, its independent verdict, and whether it may yet
+    take effect. Pure view over the ledger; the ratify/deny actions are auth-gated
+    in the app."""
+    from trellis.selfimprove import ImprovementEngine, ImprovementLoop, PROPOSAL_KIND
+    g = _ground(ledger, ground)
+    loop = ImprovementLoop(ledger, ground=g)
+    eng = ImprovementEngine(ledger, author="witness", ground=g)
+    stale_ids = {e.id for e in loop.stale_improvements()}
+    questions = [{
+        "title": e.body.get("title", ""),
+        "assumption": e.body.get("assumption", ""),
+        "stale": e.id in stale_ids,
+        "reasked": e.body.get("reasked", 0),
+    } for e in loop.open_improvements()]
+    # proposals awaiting the human (not yet ratified/rejected)
+    proposals = []
+    for e in eng.open_proposals():
+        pid = e.body.get("proposal_id")
+        try:
+            eng.can_take_effect(e.id)
+            effect = True
+        except Exception:
+            effect = False
+        proposals.append({
+            "entry_id": e.id,
+            "proposal_id": pid,
+            "target": e.body.get("target"),
+            "proposal": e.body.get("proposal"),
+            "rationale": e.body.get("rationale"),
+            "source": e.body.get("source"),
+            "verified": bool(e.body.get("verified")),
+            "verdict": e.body.get("verdict"),
+            "disposition": e.body.get("disposition"),
+            "evidence": e.body.get("evidence_ids", []),
+            "supply_chain": e.body.get("supply_chain_note", ""),
+            "can_take_effect": effect,
+        })
+    # count the friction burns on the record (what it learned about itself)
+    burns = len(ledger.active("friction"))
+    return {"questions": questions, "stale_count": len(stale_ids),
+            "proposals": proposals, "burns": burns}
