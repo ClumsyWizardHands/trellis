@@ -40,6 +40,31 @@ Run `python3 -m pytest` — these are not aspirations, they are the suite.
 | Silent completion when the store is down | a loop whose outcome can't be written raises `OutcomePersistenceError` and emits to an emergency sink — never reports success on an unrecorded run | `test_unforgivable_silence.py::test_unwritable_ledger_fails_loud_not_silent` |
 | Outbox double-fire / restart amnesia / split-brain | the ledger is the source of truth; the outbox reconstructs full payload + status on restart; `fire()` records a `firing` intent and is idempotent (no blind retry); an ambiguous outcome is `UNKNOWN`, reconciled by a human | `test_durable_outbox.py::test_survives_a_restart_with_full_payload`, `::test_no_double_fire_on_retry_after_a_crash`, `::test_web_approval_is_seen_by_a_fresh_outbox_no_split_brain`, `::test_unknown_is_reconciled_by_a_human` |
 
+### Round 8–9 hardening — the two external audits (2026-07-20/21)
+
+Two outside audits (an infrastructure/reliability pass and a context-engineering
+pass) turned their doctrine on the harness. Every Critical and High they raised, and
+several Mediums, are now closed and pinned — the highest-stakes fixes independently
+re-verified by a separate agent.
+
+| Guarantee | Enforced by | Proven by |
+|-----------|-------------|-----------|
+| Authority is authenticated, not a claimed string | the approver is derived from a signed session (`auth.Authenticator`), never a form field; `_require_human` 401s without one | `test_auth.py`, `test_web_auth.py::test_approve_without_a_session_is_401`, `::test_login_then_approve_records_the_authenticated_id` |
+| The outbox survives a crash and never double-fires | event-sourced on the ledger; idempotent `fire()`; `UNKNOWN` + human reconcile | `test_durable_outbox.py` (restart / no-double-fire / reconcile / split-brain) |
+| A verification pass means the OUTCOME held | `PRECONDITIONS_PASSED` ≠ `VERIFIED`; outcome predicates; external-only → `INSUFFICIENT` | `test_verify_evidence.py` |
+| The workspace is the trust boundary | `read`/`map` refuse `../` and symlink escapes | `test_workspace_containment.py` |
+| Conversation keys are injective | delimiter-safe encoding — no `__`-in-field collision | `test_surface_key_injective.py` |
+| Future/skewed time is quarantined | `Staleness.FUTURE`, flagged "do not treat as current" | `test_unforgivable_time.py::test_future_dated_data_is_quarantined_not_fresh` |
+| A run whose outcome can't persist fails loud | `OutcomePersistenceError` + emergency sink | `test_unforgivable_silence.py::test_unwritable_ledger_fails_loud_not_silent` |
+| The record compounds without slowing | rebuildable read-cache, file stays the truth | `test_ledger_cache.py` |
+| Actual model work is bounded (not just ticks) | a `Budget` on wall-clock / provider calls / tokens | `test_budget.py` |
+| Scheduling is verifiable state that survives restart | registrations + firings are ledger events | `test_scheduler.py` |
+| Passes can't be torn or silently clobbered | atomic write + optimistic-concurrency version | `test_pass_concurrency.py` |
+| Retrieved content is data, not instructions | the «data» fence + standing rule #6 | `test_prompt_injection.py` |
+| A decision cites a REAL EMP node | `EMP.has_node`; the Witness rejects a fabricated lineage | `test_emp_lineage.py` |
+| The agent proposes its own repair, never applies it | staged + independently verified + human-ratified | `test_selfimprove.py`, `test_reflection.py` |
+| The opinion is formed over reloaded state | the context compiler + `ContextManifest` | `test_context.py` |
+
 One honest caveat, stated the way the dossier would want it stated: these tests
 prove the *harness* refuses the failure modes. They cannot prove a *model*
 seated in it is wise. That gap is exactly why verification is external, staged
