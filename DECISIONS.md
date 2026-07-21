@@ -693,6 +693,39 @@ shrink and pinned the replacement + same-size-rewrite cases now closed. Tests: `
 
 ---
 
+## D28 — Authority is an authenticated principal, derived server-side, never a form field ✅ fresh
+
+**Decision:** the human seat is filled by an **authenticated `Principal`**, not a caller-supplied
+string. An `authenticated` Principal can only be minted by `auth.Authenticator` after verifying a
+secret; the web derives the approver from a **signed, expiring session cookie**, never from a form
+field. Approvals, denials, and affirmations read the identity from the verified session — a caller
+can no longer POST `human=alex` to satisfy the gate. Right-sized for the deployment (a personal
+agent on your machine): one shared secret — set `TRELLIS_APPROVER_SECRET` + `TRELLIS_HUMAN`, or the
+server mints an **ephemeral login token and prints it once to the console you launched** (only
+someone with that terminal can log in). A multi-user deployment swaps the `Authenticator` for real
+accounts / OIDC behind the same `Principal` seam.
+
+**Triangulation:**
+1. Codex infrastructure audit, Critical 1 (`docs/audits/AUDIT-2026-07-20.md`): *"authority is a
+   string, not an authenticated principal — the web routes accept the human name from an HTML form;
+   there is no authentication… an agent or HTTP caller can say it is 'alex' and satisfy the gate."*
+   The prescription: a `Principal`/`ActorContext` created only by a trusted boundary; web identity
+   from an authenticated session, never a form field.
+2. Refusal #5 (D10, D26) + the web self-approval / homoglyph fixes (2026-07-17): those closed
+   *disguise* (spelling, homoglyph) but not *impersonation* — the form field was still trusted. D28
+   closes impersonation: the id is server-verified before it reaches the independence guard.
+3. D11 (small core, zero-dependency; the web is an optional extra): `auth.py` is stdlib-only (hmac
+   / secrets / base64); the session is a tamper-evident HMAC, no session store to stand up.
+
+**Consequence:** `trellis/auth.py` (`Principal`, `Authenticator` — authenticate, issue/verify
+signed sessions); `web/app.py` gains `/login` + `/logout`, a `_principal(request)` reader, and
+`_require_human(request)` (401 without a valid session); the approve/deny/affirm forms drop the
+"your name" field. Honest scope: this is single-user shared-secret auth over a local session —
+appropriate for the personal deployment, and it is the *seam*, not the ceiling; CSRF tokens and
+real accounts are the next step for a multi-user server. Tests: `test_auth.py`, `test_web_auth.py`.
+
+---
+
 ## ⏳ Watch list (decisions deliberately NOT taken)
 
 - **W1 — No skill marketplace / no auto-installed skills.** [OPENCLAW] supply-chain

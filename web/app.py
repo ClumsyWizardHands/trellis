@@ -37,9 +37,33 @@ LEDGER_PATH = os.environ.get("TRELLIS_LEDGER", "state/ledger.jsonl")
 
 app = FastAPI(title="trellis")
 
+# --- authentication (Codex Critical 1): the approver is derived from a SIGNED
+# SESSION, never a form field. Set TRELLIS_APPROVER_SECRET + TRELLIS_HUMAN for a
+# stable credential, or the server mints an ephemeral one and prints a one-time
+# login token to the console (see main()). ---
+from trellis.auth import Authenticator, Principal
+_AUTH, _LOGIN_TOKEN = Authenticator.from_env_or_ephemeral()
+SESSION_COOKIE = "trellis_session"
+
 
 def _ledger() -> Ledger:
     return Ledger(LEDGER_PATH, TimeGround())
+
+
+def _principal(request: Request) -> "Principal | None":
+    """The authenticated human this request is acting as, or None — read from the
+    signed session cookie, NEVER from a form field."""
+    return _AUTH.verify_session(request.cookies.get(SESSION_COOKIE))
+
+
+def _require_human(request: Request) -> str:
+    """The canonical id of the authenticated approver, or 401. This replaces the
+    old caller-supplied `human` form field: authority is now server-verified."""
+    p = _principal(request)
+    if p is None or not p.authenticated:
+        raise HTTPException(status_code=401,
+                            detail="not signed in — visit /login and enter the approver token")
+    return p.id
 
 
 def esc(x) -> str:
@@ -117,7 +141,7 @@ SHELL = """<!doctype html><html><head><meta charset="utf-8">
 <script src="https://cdnjs.cloudflare.com/ajax/libs/htmx-ext-sse/2.2.2/sse.min.js"></script>
 <style>{style}</style></head><body>
 <header><h1>🌱 trellis</h1><span class="tag">a comprehension &amp; reflection portal — not an ops console</span>
-<span class="tag" style="margin-left:auto">{ledger} · live · SSE</span></header>
+<span class="tag" style="margin-left:auto">{ledger} · live · SSE · <a href="/login" style="color:var(--acc)">sign in</a></span></header>
 <main>
 <nav>{nav}</nav>
 <section hx-ext="sse" sse-connect="/stream">
@@ -215,7 +239,6 @@ def _inbox_rows(inbox: list) -> str:
                    f'<div class="muted small">staged by {esc(a["by"])} · {esc(a["age"])}</div></div>'
                    f'<form method="post" action="/approve" style="display:flex;gap:6px;align-items:center">'
                    f'<input type="hidden" name="action_id" value="{esc(a["action_id"])}">'
-                   f'<input name="human" placeholder="your name" required>'
                    f'<button>approve</button>'
                    f'<button class="deny" formaction="/deny">deny</button></form></div>')
     return "".join(out)
@@ -506,7 +529,6 @@ def _observation_body(led: Ledger, obs_id: str) -> str:
     # affirm
     out.append('<form method="post" action="/affirm" style="margin-top:12px;display:flex;gap:8px;align-items:center">'
                f'<input type="hidden" name="decision_id" value="{esc(lin["id"])}">'
-               '<input name="human" placeholder="your name" required>'
                '<button>✓ yes, that\'s right</button>'
                f'<span class="muted small">affirming compounds confidence — it never gates the agent'
                + (f' · already affirmed ×{lin["affirmed"]}' if lin["affirmed"] else '') + '</span></form>')
@@ -619,11 +641,43 @@ def ingestion_page(frag: int = 0):
     return _respond("/ingestion", _ingestion_body(_ledger()), bool(frag))
 
 
+@app.get("/login", response_class=HTMLResponse)
+def login_form(request: Request):
+    who = _principal(request)
+    if who is not None:
+        return _shell("/", f'{_pagehead("Signed in", f"You are signed in as {esc(who.id)}.")}'
+                      '<div class="panel"><form method="post" action="/logout">'
+                      '<button class="deny">sign out</button></form></div>')
+    body = (f'{_pagehead("Sign in", "Approvals are the human seat — they must be authenticated, not typed in. Enter the approver token (printed to the console the server was started from).")}'
+            '<div class="panel"><form method="post" action="/login" style="display:flex;gap:8px;align-items:center">'
+            '<input name="token" type="password" placeholder="approver token" required autofocus>'
+            '<button>sign in</button></form></div>')
+    return _shell("/", body)
+
+
+@app.post("/login")
+def login(token: str = Form(...)):
+    from trellis.auth import AuthError
+    try:
+        principal = _AUTH.authenticate(token)
+    except AuthError:
+        raise HTTPException(status_code=401, detail="invalid approver token")
+    resp = RedirectResponse("/", status_code=303)
+    resp.set_cookie(SESSION_COOKIE, _AUTH.issue_session(principal),
+                    httponly=True, samesite="strict", max_age=_AUTH.SESSION_TTL)
+    return resp
+
+
+@app.post("/logout")
+def logout():
+    resp = RedirectResponse("/login", status_code=303)
+    resp.delete_cookie(SESSION_COOKIE)
+    return resp
+
+
 @app.post("/affirm")
-def affirm(decision_id: str = Form(...), human: str = Form(...)):
-    from trellis.identity import is_effectively_blank
-    if is_effectively_blank(human):
-        raise HTTPException(status_code=400, detail="an affirmation needs a named human")
+def affirm(request: Request, decision_id: str = Form(...)):
+    human = _require_human(request)      # server-verified, not a form field
     led = _ledger()
     led.append(kind="affirmation", author=human,
                body={"decision_id": decision_id, "via": "web-ui"},
@@ -679,14 +733,14 @@ def glyph():
 
 
 @app.post("/approve")
-def approve(action_id: str = Form(...), human: str = Form(...)):
-    _record_decision(action_id, human, approve=True)
+def approve(request: Request, action_id: str = Form(...)):
+    _record_decision(action_id, _require_human(request), approve=True)
     return RedirectResponse("/", status_code=303)
 
 
 @app.post("/deny")
-def deny(action_id: str = Form(...), human: str = Form(...)):
-    _record_decision(action_id, human, approve=False)
+def deny(request: Request, action_id: str = Form(...)):
+    _record_decision(action_id, _require_human(request), approve=False)
     return RedirectResponse("/", status_code=303)
 
 
@@ -737,6 +791,15 @@ def main():  # console entry point
     args = ap.parse_args()
     os.environ["TRELLIS_LEDGER"] = args.ledger
     LEDGER_PATH = args.ledger
+    # Approvals require an authenticated session. If no TRELLIS_APPROVER_SECRET was
+    # configured, an ephemeral login token was minted — print it here, once, to the
+    # console the operator launched (only they can see it → only they can approve).
+    if _LOGIN_TOKEN:
+        print("\n" + "=" * 64, flush=True)
+        print(f"  trellis approver login token (this session):\n\n      {_LOGIN_TOKEN}\n", flush=True)
+        print(f"  visit http://{args.host}:{args.port}/login and paste it to approve.", flush=True)
+        print(f"  (set TRELLIS_APPROVER_SECRET + TRELLIS_HUMAN for a stable one.)", flush=True)
+        print("=" * 64 + "\n", flush=True)
     uvicorn.run(app, host=args.host, port=args.port)
 
 
