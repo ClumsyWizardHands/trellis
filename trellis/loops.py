@@ -353,6 +353,37 @@ class LoopRegistry:
 
     # ----- health ----------------------------------------------------------
 
+    def orphan_starts(self) -> list[dict]:
+        """loop_run_start entries with no matching loop_run_end — a process that
+        died mid-run (a hard kill / power loss), so the finally block that writes
+        the outcome never ran. Silent death made visible: these are exactly the
+        runs the no-silent-failure contract cannot see until they are swept."""
+        ended = {e.body.get("run_id") for e in self.ledger.entries()
+                 if e.kind == "loop_run_end"}
+        return [e.body for e in self.ledger.entries()
+                if e.kind == "loop_run_start" and e.body.get("run_id") not in ended]
+
+    def sweep_orphans(self, author: str) -> list[str]:
+        """Record a PROTOCOL_VIOLATION end for every orphaned start, so a hard kill
+        is covered by the same 'a run always ends in a typed outcome' guarantee the
+        finally block gives a live process. Idempotent: a swept orphan now has an
+        end and is skipped next time. Returns the run_ids swept. Called by the runner
+        at STARTUP (a fresh process is where a prior process's death is discovered)."""
+        swept = []
+        for body in self.orphan_starts():
+            rid = body.get("run_id")
+            self.ledger.append(
+                kind="loop_run_end", author=author,
+                body={"run_id": rid, "loop": body.get("loop"),
+                      "surface_key": body.get("surface_key"),
+                      "outcome": Outcome.PROTOCOL_VIOLATION.value,
+                      "reason": "orphaned loop_run_start — the process died without "
+                                "recording an outcome (hard kill); swept at startup",
+                      "swept": True},
+                tags=("loop", body.get("loop") or "?", Outcome.PROTOCOL_VIOLATION.value))
+            swept.append(rid)
+        return swept
+
     def recent_outcomes(self, loop_name: str, n: int = 5) -> list[str]:
         ends = [e for e in self.ledger.entries()
                 if e.kind == "loop_run_end" and e.body.get("loop") == loop_name]

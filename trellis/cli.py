@@ -384,6 +384,70 @@ def cmd_demo(args: argparse.Namespace) -> int:
     return 0
 
 
+# ---------- tick / run (the always-on runner, D37) ----------
+
+def _build_runner():
+    """Construct a ledger-backed Runner over the configured ledger + a windowed,
+    ledger-derived daily budget. Model handlers are a separate seat (a provider must
+    be configured to wire the witness cycle); the runner itself needs no model."""
+    from .ledger import Ledger
+    from .runner import Runner, budget_from_env
+    ledger = Ledger(config.ledger_path())
+    budget = budget_from_env(ledger)
+    return Runner(ledger, budget=budget)
+
+
+def _print_health(runner) -> None:
+    h = runner.health()
+    orphans = h["orphan_starts"]
+    if orphans:
+        print(f"  ! {len(orphans)} orphaned loop start(s) — a prior hard-kill")
+    for name, v in h["schedules"].items():
+        mark = "✓" if v.get("ok") else "!"
+        print(f"  {mark} schedule {name}: {v.get('reason', '?')}")
+    if "budget" in h:
+        b = h["budget"]
+        print(f"  · budget: {b['spent']}/{b['cap']} {b['unit']} spent today "
+              f"({b['remaining']} left)")
+
+
+def cmd_tick(args: argparse.Namespace) -> int:
+    config.load_dotenv()
+    runner = _build_runner()
+    # No model handlers are wired here (that seat needs a configured provider); the
+    # tick still sweeps orphans, registers the standing schedules, enforces the
+    # budget, and reports health — the crash-safe scaffolding runs offline.
+    report = runner.tick(handlers={})
+    if report["swept"]:
+        print(f"swept {len(report['swept'])} orphaned loop start(s) "
+              "(prior hard-kill → recorded as protocol_violation)")
+    if report["budget_blocked"]:
+        print("tick skipped: daily budget cap reached — no new work started")
+    else:
+        fired = report["fired"]
+        print(f"ran {len(fired)} due schedule(s)"
+              + (": " + ", ".join(f"{n}={o}" for n, o in fired) if fired else ""))
+    _print_health(runner)
+    return 0
+
+
+def cmd_run(args: argparse.Namespace) -> int:
+    config.load_dotenv()
+    from datetime import timedelta
+
+    from .runner import default_cadence
+    runner = _build_runner()
+    cadence = (timedelta(seconds=args.every) if getattr(args, "every", None)
+               else default_cadence())
+    print(f"trellis run — always-on while this process lives; tick every "
+          f"{cadence.total_seconds():.0f}s (Ctrl-C to stop)")
+    try:
+        runner.run(handlers={}, cadence=cadence)
+    except KeyboardInterrupt:  # pragma: no cover - interactive
+        print("\nstopped.")
+    return 0
+
+
 # ---------- web ----------
 
 def cmd_web(args: argparse.Namespace) -> int:
@@ -408,13 +472,17 @@ def main(argv=None) -> int:
     d = sub.add_parser("demo", help="run a full witness cycle offline (no accounts)")
     d.add_argument("--fresh", action="store_true",
                    help="reset demo state before running (also clears legacy examples/.state)")
+    sub.add_parser("tick", help="run one always-on pass (sweep, schedule, budget, health)")
+    rn = sub.add_parser("run", help="the in-process always-on loop (sleep then tick)")
+    rn.add_argument("--every", type=float, default=None,
+                    help="seconds between ticks (default TRELLIS_TICK_SECONDS or 900)")
     w = sub.add_parser("web", help="launch the read-only portal ([web] extra)")
     w.add_argument("rest", nargs=argparse.REMAINDER,
                    help="args passed through to trellis-web (e.g. --port 8001)")
 
     args = ap.parse_args(argv)
-    return {"init": cmd_init, "doctor": cmd_doctor,
-            "demo": cmd_demo, "web": cmd_web}[args.cmd](args)
+    return {"init": cmd_init, "doctor": cmd_doctor, "demo": cmd_demo,
+            "tick": cmd_tick, "run": cmd_run, "web": cmd_web}[args.cmd](args)
 
 
 if __name__ == "__main__":  # pragma: no cover
