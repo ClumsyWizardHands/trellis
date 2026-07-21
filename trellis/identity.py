@@ -99,6 +99,28 @@ def same_identity(a: str, b: str) -> bool:
     return bool(na) and na == nb
 
 
+def is_independent(actor: str, other: str) -> bool:
+    """True only when `other` names a VALID actor provably distinct from `actor`.
+
+    An anti-self-cert / independence gate that reads RAW, attacker-controllable
+    ledger authors cannot use `same_identity`: a homoglyph of the maker
+    ('makеr' with a Cyrillic е) folds to a DIFFERENT ascii-stripped value, so
+    `same_identity('makеr', 'maker')` is False and the forger reads as a second,
+    independent party — exactly the round-4 #46 attack, one layer deeper (the
+    verifier/ratifier author instead of the id field). The fix is the
+    require_identity doctrine — REJECT exotic ids rather than reason about them:
+    an id that is not a canonical ASCII identity (blank, homoglyph, invisible-
+    laden) is NEVER independent, so the gate treats it as the maker itself
+    (fail-closed). Legitimate non-ASCII display names must be registered with an
+    ASCII canonical id (see IdentityRegistry), same as everywhere else."""
+    try:
+        a = require_identity(actor)
+        b = require_identity(other)
+    except InvalidIdentityError:
+        return False
+    return a != b
+
+
 class InvalidIdentityError(ValueError):
     """An identity string that is not a usable ASCII identifier. Rejecting these
     at the gate — rather than folding or silently mangling them — is the
