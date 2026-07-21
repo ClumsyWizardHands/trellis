@@ -35,7 +35,8 @@ from .identity import (is_effectively_blank, is_independent, require_identity,
 from .ledger import Entry, Ledger
 from .loops import LoopSpec
 from .memory import _fails_synthesis
-from .verify import CompletionClaim, Evidence, EvidenceKind, Verifier, record_verdict
+from .verify import (CompletionClaim, Evidence, EvidenceKind, Verifier,
+                     convene_verification, record_verdict)
 
 
 REFLECTION_KIND = "reflection_log"
@@ -132,10 +133,16 @@ class ReflectionRitual:
     def __init__(self, ledger: Ledger, author: str,
                  verifier: Optional[Verifier] = None,
                  ground: Optional[TimeGround] = None,
-                 cadence: timedelta = DEFAULT_CADENCE):
+                 cadence: timedelta = DEFAULT_CADENCE,
+                 write_verifier: Optional[Verifier] = None):
         self.ledger = ledger
         self.author = author
-        self.verifier = verifier
+        self.verifier = verifier          # gates a self-change proposal (D18)
+        # the INDEPENDENT Haiku seat that verifies the reflection WRITE itself
+        # (D34: verify broadly — reflections are a memory write whose errors
+        # compound). Optional so existing callers are unchanged; when set, run()
+        # convenes verification of the reflection entry after writing it.
+        self.write_verifier = write_verifier
         self.ground = ground or ledger.ground
         self.cadence = cadence
 
@@ -199,7 +206,7 @@ class ReflectionRitual:
         if self_change is not None:
             change_body = self._verify_self_change(self_change, now)
 
-        return self.ledger.append(
+        entry = self.ledger.append(
             kind=REFLECTION_KIND, author=self.author,
             body={
                 "session_id": session_id,
@@ -213,6 +220,21 @@ class ReflectionRitual:
             event_time=now,
             tags=("reflection",),
         )
+        # D34 — broad verification: the reflection WRITE is itself convened past an
+        # independent seat and the verdict recorded (a refuted reflection is
+        # contested + escalated, never deleted). This does NOT gate the write —
+        # the agent reflects on its own authority (D33); the verdict is machine
+        # verification, portal-visible, human-in-the-loop only on a refutation.
+        if self.write_verifier is not None:
+            claim = CompletionClaim(
+                maker=self.author,
+                task=f"reflection write {entry.id}",
+                summary=(learned[:200] or "reflection"),
+                evidence=[Evidence(EvidenceKind.LEDGER, entry.id,
+                                   expect_kind=REFLECTION_KIND)])
+            convene_verification(self.ledger, claim, self.write_verifier,
+                                 subject_id=entry.id, subject_kind=REFLECTION_KIND)
+        return entry
 
     def _verify_self_change(self, change: SelfChange, now: datetime) -> dict:
         """Build a completion claim for the proposed change and run it past the

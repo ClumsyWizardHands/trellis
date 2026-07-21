@@ -36,7 +36,7 @@ from typing import Optional, Protocol
 
 from .clock import TimeGround
 from .identity import same_identity, require_identity
-from .ledger import Ledger
+from .ledger import Entry, Ledger
 
 
 class SelfCertificationError(Exception):
@@ -350,15 +350,191 @@ def record_verdict(ledger: Ledger, claim: CompletionClaim, verdict: Verdict) -> 
 
 def trust_record(ledger: Ledger, maker: str) -> dict:
     """A maker's verification history — the basis for moving work between the
-    three trust buckets (human-decides / agent-helps / agent-does)."""
+    three trust buckets (human-decides / agent-helps / agent-does).
+
+    THE one canonical trust formula (D35): every surface delegates here, nothing
+    recomputes trust. The broad-verification verdicts convene_verification records
+    feed straight in (they are `verification` entries tagged with the maker), so a
+    REFUTED lowers the ratio and an INSUFFICIENT never inflates it."""
     entries = [e for e in ledger.entries()
                if e.kind == "verification" and e.body.get("maker") == maker]
     counts = {"verified": 0, "preconditions_passed": 0, "refuted": 0, "insufficient": 0}
     for e in entries:
         counts[e.body["status"]] = counts.get(e.body["status"], 0) + 1
     total = sum(counts.values())
+    # informational, NOT part of the ratio: open contested items this maker owns,
+    # so a portal can show "trust AND what's under dispute" from the one function.
+    contested = sum(1 for i in contested_items(ledger) if i.get("maker") == maker)
     # verified_ratio counts ONLY true outcome-verifications — preconditions_passed
     # is honest ("evidence openable") but is NOT a semantic pass and must not inflate
     # trust (Codex Critical 4: don't compound trust on artifact existence).
-    return {"maker": maker, "total": total, **counts,
+    return {"maker": maker, "total": total, **counts, "contested_open": contested,
             "verified_ratio": (counts["verified"] / total) if total else None}
+
+
+# ---------------------------------------------------------------------------
+# convene: broad, cheap, independent verification of a memory write (D34/D35)
+# ---------------------------------------------------------------------------
+
+CONTESTED_KIND = "contested"
+CONTESTED_RESOLUTION_KIND = "contested_resolution"
+CAPABILITY_GAP_KIND = "capability_gap"
+
+# most-skeptical-wins ordering: a refutation always beats a confirmation, and a
+# model that cannot confirm (INSUFFICIENT) can never be upgraded to VERIFIED by a
+# merely-well-formed floor. VERIFIED is earned only when NOTHING more skeptical
+# was returned — so the model verifier refutes/confirms but never mints VERIFIED
+# past a floor with no outcome predicate (D25/D34).
+_SEVERITY = {
+    VerdictStatus.VERIFIED: 0,
+    VerdictStatus.PRECONDITIONS_PASSED: 1,
+    VerdictStatus.INSUFFICIENT: 2,
+    VerdictStatus.REFUTED: 3,
+}
+
+
+def _subject_from_claim(claim: CompletionClaim) -> Optional[str]:
+    """When no subject_id is given, the subject is the first openable ledger
+    entry the claim is about — the decision/reflection/read being verified."""
+    for e in claim.evidence:
+        if e.kind == EvidenceKind.LEDGER:
+            return e.ref
+    return None
+
+
+def convene_verification(ledger: Ledger, claim: CompletionClaim, verifier,
+                         *, floor: Optional["RuleVerifier"] = None,
+                         subject_id: Optional[str] = None,
+                         subject_kind: Optional[str] = None,
+                         record: bool = True) -> Verdict:
+    """Convene independent verification of a memory write and record the outcome
+    so trust accrues (D34: verify BROADLY — decision-tree writes, reflection
+    writes, and load-bearing claims — because an unverified memory error compounds).
+
+    `verifier` is the independent seat: a single ModelVerifier (the Haiku seat)
+    or a VerifierPanel. `floor` is a deterministic RuleVerifier run FIRST; when
+    omitted, one is built for a bare model verifier so the free floor always runs
+    before any model spend. A refuted floor short-circuits (no model consulted).
+
+    Combined refute-by-default (most-skeptical wins). On the combined verdict:
+      * REFUTED  → append a `contested` event naming the subject and flag it for
+        human escalation (D35); the subject is NEVER deleted (D2), only contested.
+      * INSUFFICIENT → record a `capability_gap` (a persistent one is flagged),
+        never counted as a pass.
+    Returns the combined Verdict. Independence is structural: a maker verifying
+    itself raises SelfCertificationError before anything is recorded past the floor.
+    """
+    subject_id = subject_id or _subject_from_claim(claim)
+    verdicts: list[Verdict] = []
+
+    active_floor = floor
+    # auto-floor for a bare model verifier (has a provider, not a panel of lenses)
+    if active_floor is None and hasattr(verifier, "provider") and not hasattr(verifier, "lenses"):
+        active_floor = RuleVerifier(f"{verifier.id}:floor", ledger, ledger.ground)
+
+    if active_floor is not None:
+        fv = active_floor.verify(claim)          # raises if the floor id == maker
+        verdicts.append(fv)
+        if record:
+            record_verdict(ledger, claim, fv)
+        if fv.status == VerdictStatus.REFUTED:
+            _mark_contested(ledger, claim, fv, subject_id, subject_kind)
+            return fv                            # don't pay the model for a dead claim
+
+    mv = verifier.verify(claim)                  # raises if the verifier id == maker
+    verdicts.append(mv)
+    # a panel self-records its lens verdicts (+ a panel_verdict) but not an overall
+    # `verification` under its own id; a bare model verifier records nothing itself.
+    # Record the returned verdict unless one already carries this claim+verifier.
+    already = any(e.kind == "verification" and e.body.get("claim_id") == claim.id
+                  and e.author == mv.verifier for e in ledger.entries())
+    if record and not already:
+        record_verdict(ledger, claim, mv)
+
+    worst = max(verdicts, key=lambda v: _SEVERITY[v.status])
+    combined = Verdict(
+        claim_id=claim.id, verifier=worst.verifier, status=worst.status,
+        checks=[c for v in verdicts for c in v.checks],
+        note="; ".join(f"{v.verifier}={v.status.value}" for v in verdicts))
+
+    if combined.status == VerdictStatus.REFUTED:
+        _mark_contested(ledger, claim, combined, subject_id, subject_kind)
+    elif combined.status == VerdictStatus.INSUFFICIENT:
+        _record_capability_gap(ledger, claim, combined, subject_id, subject_kind)
+    return combined
+
+
+def _mark_contested(ledger: Ledger, claim: CompletionClaim, verdict: Verdict,
+                    subject_id: Optional[str], subject_kind: Optional[str]) -> Entry:
+    """A REFUTED verdict marks its subject contested and escalates to the human
+    (D35). Append-only — the subject decision/read is NOT deleted; it is removed
+    from the trusted read the next cycle compiles by querying contested_items."""
+    return ledger.append(
+        kind=CONTESTED_KIND, author=verdict.verifier,
+        body={"claim_id": claim.id, "maker": claim.maker, "subject_id": subject_id,
+              "subject_kind": subject_kind, "task": claim.task, "status": "refuted",
+              "note": verdict.note or "refuted by independent verification",
+              "escalated": True},
+        tags=("contested", "escalation", claim.maker))
+
+
+def _record_capability_gap(ledger: Ledger, claim: CompletionClaim, verdict: Verdict,
+                           subject_id: Optional[str], subject_kind: Optional[str]) -> Entry:
+    """A persistent INSUFFICIENT is a capability gap, not a pass (D35): the
+    harness cannot check this class of claim yet. Occurrences accumulate so a
+    recurring blind spot is flagged for the confusion-harvest, never swallowed."""
+    prior = sum(1 for e in ledger.entries()
+                if e.kind == CAPABILITY_GAP_KIND and e.body.get("subject_id") == subject_id)
+    return ledger.append(
+        kind=CAPABILITY_GAP_KIND, author=verdict.verifier,
+        body={"claim_id": claim.id, "maker": claim.maker, "subject_id": subject_id,
+              "subject_kind": subject_kind, "task": claim.task,
+              "note": "independent verification INSUFFICIENT — recorded as a "
+                      "capability gap, not a pass",
+              "occurrence": prior + 1, "persistent": (prior + 1) >= 2},
+        tags=("capability_gap", "insufficient", claim.maker))
+
+
+def contested_items(ledger: Ledger, include_resolved: bool = False) -> list[dict]:
+    """The portal/witness query: subjects an independent verifier REFUTED and
+    flagged for escalation, most recent first. Append-only — a human clears one
+    with resolve_contested(), which appends a resolution rather than deleting the
+    contest. The context compiler reads this to drop contested subjects from the
+    trusted read (D35)."""
+    resolved: set[str] = set()
+    if not include_resolved:
+        for e in ledger.entries():
+            if e.kind == CONTESTED_RESOLUTION_KIND:
+                cid = e.body.get("contested_id")
+                if cid:
+                    resolved.add(cid)
+    out: list[dict] = []
+    for e in ledger.entries():
+        if e.kind != CONTESTED_KIND:
+            continue
+        if not include_resolved and e.id in resolved:
+            continue
+        out.append({
+            "contested_id": e.id, "subject_id": e.body.get("subject_id"),
+            "subject_kind": e.body.get("subject_kind"), "maker": e.body.get("maker"),
+            "claim_id": e.body.get("claim_id"), "task": e.body.get("task"),
+            "note": e.body.get("note"), "escalated": e.body.get("escalated", True),
+            "resolved": e.id in resolved, "when": e.stamp.event_time.isoformat()})
+    out.reverse()
+    return out
+
+
+def resolve_contested(ledger: Ledger, contested_id: str, human: str,
+                      note: str = "") -> Entry:
+    """The human seat on the escalation queue: append a resolution clearing a
+    contested item (never a deletion). The resolver runs through require_identity
+    so a blank or homoglyph yes is refused at the gate, same as every human seat."""
+    human = require_identity(human, "resolver")
+    c = ledger.get(contested_id)
+    if c is None or c.kind != CONTESTED_KIND:
+        raise KeyError(f"no contested entry {contested_id}")
+    return ledger.append(
+        kind=CONTESTED_RESOLUTION_KIND, author=human,
+        body={"contested_id": contested_id, "subject_id": c.body.get("subject_id"),
+              "resolved_by": human, "note": note},
+        tags=("contested", "resolved"))
