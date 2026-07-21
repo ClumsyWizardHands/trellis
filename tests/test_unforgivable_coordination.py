@@ -141,7 +141,9 @@ def test_approved_action_fires_and_everything_is_ledgered(ledger):
     assert fired == ["the digest"]
     events = [e.body.get("event") or e.body.get("status")
               for e in ledger.entries() if e.kind == "staged_action"]
-    assert events == ["staged", "approved", "fired"]
+    # a `firing` INTENT is recorded before the side effect (D26 durability), so a
+    # crash between intent and outcome is recoverable and can't double-fire
+    assert events == ["staged", "approved", "firing", "fired"]
 
 
 def test_denial_is_recorded_with_reason(ledger):

@@ -1,4 +1,4 @@
-"""stage.py — stage, don't fire. (DECISIONS.md D10)
+"""stage.py — stage, don't fire. (DECISIONS.md D10, D26)
 
 "Nothing is ever sent, posted, or applied automatically… correcting, not
 creating, is where strategic thinking happens." — DAILY-EMPIRE-PROTOCOL,
@@ -11,20 +11,28 @@ grievance, Peter's "can't send 90% to a CEO"). And the 2026 security record —
 cheap structural defense: an injected agent can stage garbage, but a human is
 between the garbage and the world.
 
-Every transition is a ledger event. Firing an unapproved action raises.
-Approval names a human. There is no bypass flag — if you want auto-fire,
-you have to fork the file, and the diff will say what you did.
+DURABILITY (D26, Codex Critical 3): the **ledger is the single source of truth**;
+the in-memory dict is a rebuildable cache. Every transition — stage, approve,
+deny, firing, fired, unknown — is a ledger event carrying the FULL payload, so a
+fresh process (and the web UI, and the executor) all reconstruct the same state.
+`fire()` is idempotent: it records a `firing` intent BEFORE calling the world and
+refuses to re-fire an action already firing/fired, so a crash-then-retry can never
+double-send. When the executor's outcome is ambiguous the action lands `unknown`
+(not `approved`), and only a human `reconcile()` resolves it. Refusal #5 now holds
+across a restart, not just within one process.
 """
 
 from __future__ import annotations
 
+import hashlib
 import uuid
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import Callable, Optional
 
 from .clock import TimeGround
-from .identity import InvalidIdentityError, require_identity, same_identity
+from .identity import (InvalidIdentityError, is_effectively_blank,
+                       require_identity, same_identity)
 from .ledger import Ledger
 from .surfaces import ConversationKey
 
@@ -33,12 +41,25 @@ class ActionStatus(str, Enum):
     STAGED = "staged"
     APPROVED = "approved"
     DENIED = "denied"
+    FIRING = "firing"        # intent recorded; the executor is being called (in-flight)
     FIRED = "fired"
+    UNKNOWN = "unknown"      # executor outcome ambiguous — a human must reconcile
     EXPIRED = "expired"
 
 
 class UnapprovedFireError(Exception):
     pass
+
+
+class DoubleFireError(Exception):
+    """An action already firing or fired cannot be fired again — no blind retry
+    of a side effect that may already have reached the world (D26)."""
+
+
+class FireOutcomeUnknown(Exception):
+    """The executor raised after the firing intent was recorded — the side effect
+    may or may not have reached the world. The action is durably `unknown`; a human
+    reconciles it. Never silently retried."""
 
 
 @dataclass
@@ -51,16 +72,58 @@ class StagedAction:
     status: ActionStatus = ActionStatus.STAGED
     approved_by: Optional[str] = None
     denial_reason: Optional[str] = None
+    idempotency_key: str = field(default_factory=lambda: uuid.uuid4().hex)
     id: str = field(default_factory=lambda: uuid.uuid4().hex[:12])
+
+    def content_hash(self) -> str:
+        return hashlib.sha256(
+            f"{self.kind}\x1f{self.target}\x1f{self.content}".encode("utf-8")).hexdigest()[:16]
 
 
 class Outbox:
-    """The one gate between an agent and the world."""
+    """The one gate between an agent and the world — durable and idempotent."""
 
     def __init__(self, ledger: Ledger, ground: Optional[TimeGround] = None):
         self.ledger = ledger
         self.ground = ground or ledger.ground
         self._actions: dict[str, StagedAction] = {}
+        self._load()   # reconstruct from the ledger — survive a restart (D26)
+
+    # ----- reconstruction (the ledger is the source of truth) ----------------
+
+    def _load(self) -> None:
+        """Rebuild every action's payload + current status from the ledger's
+        staged_action events. The payload comes from the `staged` event; the
+        status from the latest event per action_id (which the web UI also writes,
+        so there is no split-brain)."""
+        payloads: dict[str, dict] = {}
+        latest: dict[str, tuple] = {}   # action_id -> (write_time, status, body)
+        for e in self.ledger.entries():
+            if e.kind != "staged_action":
+                continue
+            aid = e.body.get("action_id")
+            if not aid:
+                continue
+            ev = e.body.get("event", "staged")
+            if ev in ("staged", None) and e.body.get("kind"):
+                payloads[aid] = e.body
+            prev = latest.get(aid)
+            if prev is None or e.stamp.write_time >= prev[0]:
+                latest[aid] = (e.stamp.write_time, e.body.get("status", "staged"), e.body)
+        for aid, pay in payloads.items():
+            wt, status, latest_body = latest.get(aid, (None, "staged", pay))
+            a = StagedAction(
+                kind=pay.get("kind", "?"), target=pay.get("target", ""),
+                content=pay.get("content", pay.get("content_preview", "")),
+                created_by=pay.get("author_created_by", pay.get("created_by", "?")),
+                idempotency_key=pay.get("idempotency_key", ""), id=aid)
+            try:
+                a.status = ActionStatus(status)
+            except ValueError:
+                a.status = ActionStatus.STAGED
+            a.approved_by = latest_body.get("approved_by") or latest_body.get("by")
+            a.denial_reason = latest_body.get("reason")
+            self._actions[aid] = a
 
     # ----- agent side -------------------------------------------------------
 
@@ -70,7 +133,12 @@ class Outbox:
             kind="staged_action", author=action.created_by,
             body={"action_id": action.id, "kind": action.kind,
                   "target": action.target, "status": action.status.value,
-                  "content_preview": action.content[:280]},
+                  # FULL payload persisted (D26) — reconstructable, not a preview
+                  "content": action.content,
+                  "content_preview": action.content[:280],
+                  "content_hash": action.content_hash(),
+                  "idempotency_key": action.idempotency_key,
+                  "created_by": action.created_by},
             tags=("outbox", action.kind),
         )
         return action.id
@@ -78,6 +146,9 @@ class Outbox:
     def pending(self) -> list[StagedAction]:
         """The human's correction surface: everything waiting for a decision."""
         return [a for a in self._actions.values() if a.status == ActionStatus.STAGED]
+
+    def get(self, action_id: str) -> Optional[StagedAction]:
+        return self._actions.get(action_id)
 
     # ----- human side -------------------------------------------------------
 
@@ -109,7 +180,7 @@ class Outbox:
         self._require_approver(human, a.created_by)
         a.status = ActionStatus.APPROVED
         a.approved_by = human
-        self._log(a, human, "approved")
+        self._log(a, human, "approved", approved_by=human)
 
     def deny(self, action_id: str, human: str, reason: str) -> None:
         a = self._require(action_id)
@@ -120,18 +191,80 @@ class Outbox:
 
     # ----- the world side ----------------------------------------------------
 
+    def _fire_block(self, action_id: str) -> Optional[str]:
+        """The idempotency check — from the LEDGER, not just memory. Returns the
+        blocking state ('firing' in-flight, or 'fired' done) if this action must
+        NOT be fired, else None. A crash after the firing intent leaves 'firing'
+        on record → blocked (no blind retry of a side effect that may have reached
+        the world). A human `reconcile(fired=False)` — 'it did NOT go out' — CLEARS
+        the block, so exactly one clean retry is allowed; `reconcile(fired=True)`
+        settles it as fired (stays blocked)."""
+        state: Optional[str] = None
+        for e in self.ledger.entries():
+            if e.kind != "staged_action" or e.body.get("action_id") != action_id:
+                continue
+            ev = e.body.get("event")
+            if ev in ("firing", "fired"):
+                state = ev
+            elif ev == "reconciled":
+                state = "fired" if e.body.get("reconciled_fired") else None
+        return state
+
     def fire(self, action_id: str, executor: Callable[[StagedAction], None]) -> None:
-        """Execute an APPROVED action via the provided executor. The executor
-        does the actual side effect (post, send, write); the outbox only ever
-        hands it approved actions."""
+        """Execute an APPROVED action via the provided executor, exactly once.
+        Records a `firing` intent BEFORE calling the world and refuses to re-fire
+        an action already firing/fired — so a crash-then-retry never double-sends.
+        On an executor error the action lands `unknown` (the remote may have
+        received it); a human reconciles. The executor is handed the idempotency
+        key so a dedup-aware destination gets true exactly-once."""
         a = self._require(action_id)
+        # idempotency FIRST: an action already firing/fired is refused outright, so
+        # a crash-then-retry (or a fire on an UNKNOWN awaiting reconcile) can't
+        # double-send. reconcile(fired=False) clears this, allowing one clean retry.
+        prior = self._fire_block(action_id)
+        if prior is not None:
+            raise DoubleFireError(
+                f"action {action_id} already recorded a '{prior}' — refusing to fire "
+                "again (a side effect that may have reached the world is not blindly "
+                "retried; reconcile the outcome instead)")
         if a.status != ActionStatus.APPROVED:
             raise UnapprovedFireError(
                 f"action {action_id} is {a.status.value}, not approved — "
                 "nothing fires without a human's yes")
-        executor(a)
+        # 1) durable INTENT before the side effect (so a crash here is recoverable)
+        a.status = ActionStatus.FIRING
+        self._log(a, a.approved_by or "?", "firing", idempotency_key=a.idempotency_key)
+        # 2) call the world
+        try:
+            executor(a)
+        except BaseException as ex:
+            # ambiguous: the remote may or may not have received it. Durably UNKNOWN,
+            # never silently retried — a human reconciles.
+            a.status = ActionStatus.UNKNOWN
+            self._log(a, a.approved_by or "?", "fire_unknown",
+                      idempotency_key=a.idempotency_key, error=repr(ex)[:300])
+            raise FireOutcomeUnknown(
+                f"executor for {action_id} raised after the firing intent was "
+                f"recorded — outcome UNKNOWN, a human must reconcile: {ex!r}") from ex
+        # 3) success
         a.status = ActionStatus.FIRED
-        self._log(a, a.approved_by or "?", "fired")
+        self._log(a, a.approved_by or "?", "fired", idempotency_key=a.idempotency_key)
+
+    def reconcile(self, action_id: str, human: str, fired: bool,
+                  note: str = "") -> None:
+        """A human resolves an `unknown` action: `fired=True` (it did reach the
+        world → mark fired, do not resend) or `fired=False` (it did not → back to
+        approved, safe to fire once more). Human-gated like every seat before the
+        world."""
+        a = self._require(action_id)
+        if a.status != ActionStatus.UNKNOWN:
+            raise UnapprovedFireError(
+                f"action {action_id} is {a.status.value}, not unknown — nothing to reconcile")
+        if is_effectively_blank(human):
+            raise UnapprovedFireError("reconciliation names the human who checked the world")
+        require_identity(human, "reconciler")
+        a.status = ActionStatus.FIRED if fired else ActionStatus.APPROVED
+        self._log(a, human, "reconciled", reconciled_fired=fired, note=note)
 
     # ----- internals ---------------------------------------------------------
 

@@ -619,6 +619,42 @@ Plan: `docs/PLAN-evidence-aware-verification.md`.
 
 ---
 
+## D26 — The outbox is durable and idempotent: refusal #5 survives a crash ✅ fresh
+
+**Decision:** the outbox's source of truth is the **ledger**, not an in-memory dict. Every
+transition (stage / approve / deny / **firing** / fired / **unknown** / reconciled) is an
+appended event carrying the **full payload**, so a fresh process — and the web UI, and the
+executor — all reconstruct the same state. `fire()` is **idempotent**: it records a `firing`
+intent *before* calling the world and refuses to re-fire an action already firing/fired, so a
+crash-then-retry can never double-send. An ambiguous executor outcome lands **`unknown`** (the
+remote may have received it), never `approved`; only a human `reconcile()` resolves it — `fired`
+(it went out, don't resend) or `approved` (it didn't, one clean retry). Refusal #5 now holds
+across a restart, not just within one process.
+
+**Triangulation:**
+1. Codex infrastructure audit, Critical 3 (`docs/audits/AUDIT-2026-07-20.md`): the outbox kept
+   actions in an in-memory dict, the ledger held only a 280-char preview, and `fire()` called the
+   executor *then* recorded fired — so a web approval was split-brain from the executor, a restart
+   lost the payload, and a retry double-sent. Prescription: an event-sourced durable outbox with
+   full payload, a compare-and-swap state machine, an idempotency key, and an UNKNOWN/reconcile
+   state.
+2. D10 (stage, don't fire) + the strongest cross-voice consensus in the dossier (never let output
+   hit a stakeholder unchecked): "nothing fires without your yes" is hollow if a crash resends it
+   or a restart forgets the yes. Durability is what makes the refusal true in the failure domain
+   that matters.
+3. D2 (append-only, attributed, bitemporal) + the web self-approval fix (2026-07-17): the ledger
+   was already the record the web writes; D26 makes the outbox *read* it, closing the split-brain
+   the earlier fix half-addressed.
+
+**Consequence:** `trellis/stage.py` — `Outbox._load()` rebuilds from the ledger; `fire()` records a
+`firing` intent, is idempotency-guarded (`_fire_block`), and lands `UNKNOWN` + raises
+`FireOutcomeUnknown` on an ambiguous executor; `reconcile()` is the human seat for an unknown.
+**Honest boundary:** true end-to-end exactly-once depends on the destination honouring the
+idempotency key; when it doesn't, trellis guarantees fire-at-most-once and surfaces `unknown` for a
+human — it cannot make a remote service deduplicate. Plan: `docs/PLAN-durable-outbox.md`.
+
+---
+
 ## ⏳ Watch list (decisions deliberately NOT taken)
 
 - **W1 — No skill marketplace / no auto-installed skills.** [OPENCLAW] supply-chain
