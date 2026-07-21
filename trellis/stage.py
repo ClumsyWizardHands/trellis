@@ -24,11 +24,17 @@ across a restart, not just within one process.
 
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import uuid
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import Callable, Optional
+
+try:
+    import fcntl   # POSIX advisory locking (macOS/Linux — the deployment)
+except ImportError:  # pragma: no cover
+    fcntl = None
 
 from .clock import TimeGround
 from .identity import (InvalidIdentityError, is_effectively_blank,
@@ -218,22 +224,31 @@ class Outbox:
         received it); a human reconciles. The executor is handed the idempotency
         key so a dedup-aware destination gets true exactly-once."""
         a = self._require(action_id)
-        # idempotency FIRST: an action already firing/fired is refused outright, so
-        # a crash-then-retry (or a fire on an UNKNOWN awaiting reconcile) can't
-        # double-send. reconcile(fired=False) clears this, allowing one clean retry.
-        prior = self._fire_block(action_id)
-        if prior is not None:
-            raise DoubleFireError(
-                f"action {action_id} already recorded a '{prior}' — refusing to fire "
-                "again (a side effect that may have reached the world is not blindly "
-                "retried; reconcile the outcome instead)")
-        if a.status != ActionStatus.APPROVED:
-            raise UnapprovedFireError(
-                f"action {action_id} is {a.status.value}, not approved — "
-                "nothing fires without a human's yes")
-        # 1) durable INTENT before the side effect (so a crash here is recoverable)
-        a.status = ActionStatus.FIRING
-        self._log(a, a.approved_by or "?", "firing", idempotency_key=a.idempotency_key)
+        # The check-then-write-intent is the critical section: two firers reading
+        # `_fire_block` before either writes `firing` could both proceed (a TOCTOU
+        # double-fire under true simultaneity — the verifier's caveat 1). Serialize
+        # it with an advisory file lock so two processes on the SAME machine (e.g.
+        # the harness and a second firer) can't both pass. The executor runs OUTSIDE
+        # the lock (never hold a lock across a network call). Cross-machine exactly-
+        # once still needs the transactional ledger (Codex High 6); by design only
+        # the harness fires, so this is defense-in-depth.
+        with self._fire_lock():
+            # idempotency FIRST: an action already firing/fired is refused outright,
+            # so a crash-then-retry (or a fire on UNKNOWN awaiting reconcile) can't
+            # double-send. reconcile(fired=False) clears this for one clean retry.
+            prior = self._fire_block(action_id)
+            if prior is not None:
+                raise DoubleFireError(
+                    f"action {action_id} already recorded a '{prior}' — refusing to fire "
+                    "again (a side effect that may have reached the world is not blindly "
+                    "retried; reconcile the outcome instead)")
+            if a.status != ActionStatus.APPROVED:
+                raise UnapprovedFireError(
+                    f"action {action_id} is {a.status.value}, not approved — "
+                    "nothing fires without a human's yes")
+            # durable INTENT before the side effect (so a crash here is recoverable)
+            a.status = ActionStatus.FIRING
+            self._log(a, a.approved_by or "?", "firing", idempotency_key=a.idempotency_key)
         # 2) call the world
         try:
             executor(a)
@@ -252,14 +267,21 @@ class Outbox:
 
     def reconcile(self, action_id: str, human: str, fired: bool,
                   note: str = "") -> None:
-        """A human resolves an `unknown` action: `fired=True` (it did reach the
+        """A human resolves an ambiguous action: `fired=True` (it did reach the
         world → mark fired, do not resend) or `fired=False` (it did not → back to
         approved, safe to fire once more). Human-gated like every seat before the
-        world."""
+        world.
+
+        Accepts both `unknown` (the executor raised) AND `firing` (the process was
+        hard-killed mid-send, so no exception ever ran and the action is stuck
+        in-flight — safe, because `fire()` refuses it, but a human still needs a way
+        to resolve it). Without the `firing` case a power-loss-mid-send action had
+        no public path forward (the verifier's caveat 2)."""
         a = self._require(action_id)
-        if a.status != ActionStatus.UNKNOWN:
+        if a.status not in (ActionStatus.UNKNOWN, ActionStatus.FIRING):
             raise UnapprovedFireError(
-                f"action {action_id} is {a.status.value}, not unknown — nothing to reconcile")
+                f"action {action_id} is {a.status.value}, not unknown/firing — "
+                "nothing to reconcile")
         if is_effectively_blank(human):
             raise UnapprovedFireError("reconciliation names the human who checked the world")
         require_identity(human, "reconciler")
@@ -267,6 +289,27 @@ class Outbox:
         self._log(a, human, "reconciled", reconciled_fired=fired, note=note)
 
     # ----- internals ---------------------------------------------------------
+
+    @contextlib.contextmanager
+    def _fire_lock(self):
+        """Advisory exclusive lock over a sidecar `<ledger>.firelock`, held only
+        for the check-then-write-intent critical section. POSIX-only; degrades to
+        a no-op where fcntl is absent (the sequential crash-retry guarantee still
+        holds without it — the lock only closes the true-simultaneity race)."""
+        path = getattr(self.ledger, "path", None)
+        if fcntl is None or path is None:
+            yield
+            return
+        lockpath = str(path) + ".firelock"
+        f = open(lockpath, "w")
+        try:
+            fcntl.flock(f.fileno(), fcntl.LOCK_EX)
+            yield
+        finally:
+            try:
+                fcntl.flock(f.fileno(), fcntl.LOCK_UN)
+            finally:
+                f.close()
 
     def _require(self, action_id: str) -> StagedAction:
         if action_id not in self._actions:

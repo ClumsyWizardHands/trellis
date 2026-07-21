@@ -124,3 +124,37 @@ def test_cannot_fire_unapproved_or_denied(tmp_path, ground):
     box.deny(aid, human="alex", reason="no")
     with pytest.raises(UnapprovedFireError):
         box.fire(aid, executor=lambda a: None)             # denied
+
+
+def test_hard_kill_mid_send_is_reconcilable_not_stuck(tmp_path, ground):
+    """Verifier caveat 2: a process hard-killed DURING the executor leaves the
+    action stuck in FIRING (no exception ever ran). It's safe (fire() refuses it),
+    but a human must be able to resolve it — reconcile() now accepts FIRING."""
+    path = tmp_path / "l.jsonl"
+    box = Outbox(Ledger(path, ground), ground)
+    aid = box.stage(StagedAction("discord_post", "#c", "m", created_by="witness"))
+    box.approve(aid, human="alex")
+    # simulate a hard kill: write the firing intent, then the process dies mid-executor
+    a = box.get(aid)
+    a.status = ActionStatus.FIRING
+    box._log(a, "alex", "firing", idempotency_key=a.idempotency_key)
+    # a fresh process sees a stuck FIRING action
+    box2 = _fresh_outbox(path, ground)
+    assert box2.get(aid).status == ActionStatus.FIRING
+    with pytest.raises((DoubleFireError, UnapprovedFireError)):
+        box2.fire(aid, executor=lambda x: None)          # safe: refuses to re-fire
+    # the human checks the world and reconciles the stuck in-flight
+    box2.reconcile(aid, human="alex", fired=True, note="found it posted")
+    assert box2.get(aid).status == ActionStatus.FIRED
+
+
+def test_fire_still_works_with_the_advisory_lock(tmp_path, ground):
+    """The advisory fire-lock doesn't break the normal path (and the executor runs
+    outside the lock)."""
+    path = tmp_path / "l.jsonl"
+    box = Outbox(Ledger(path, ground), ground)
+    aid = box.stage(StagedAction("discord_post", "#c", "m", created_by="witness"))
+    box.approve(aid, human="alex")
+    sent = []
+    box.fire(aid, executor=lambda x: sent.append(x.id))
+    assert sent == [aid] and box.get(aid).status == ActionStatus.FIRED
