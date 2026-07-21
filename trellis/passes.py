@@ -39,6 +39,12 @@ class TurdDropError(Exception):
     """A pass with no clear ask. Rejected at creation, in Peter's honor."""
 
 
+class PassConflictError(Exception):
+    """Two actors edited the same pass concurrently — the on-disk version moved
+    since this copy was loaded. Optimistic concurrency: reload, re-apply, retry;
+    the other update is never silently clobbered (Medium 13)."""
+
+
 class PassStatus(str, Enum):
     STAGED = "staged"        # written, not yet sent (stage-don't-fire applies)
     SENT = "sent"
@@ -88,6 +94,7 @@ class Pass:
     comments: list[Comment] = field(default_factory=list)
     history: list[dict] = field(default_factory=list)   # every transition, stamped
     id: str = field(default_factory=lambda: uuid.uuid4().hex[:12])
+    version: int = 0                  # optimistic-concurrency counter (Medium 13)
 
     def __post_init__(self):
         self._validate()
@@ -176,6 +183,7 @@ class Pass:
             "artifacts": self.artifacts, "status": self.status.value,
             "comments": [c.to_dict() for c in self.comments],
             "history": self.history,
+            "version": self.version,
         }
 
     @staticmethod
@@ -188,6 +196,7 @@ class Pass:
         p.status = PassStatus(d["status"])
         p.comments = [Comment.from_dict(c) for c in d.get("comments", [])]
         p.history = list(d.get("history", []))
+        p.version = int(d.get("version", 0))
         # The trust boundary is the FILE (synced drives, git): a turd-drop
         # written by another tool must not slip in through load. Validate here
         # too — review demonstrated the bypass.
@@ -208,9 +217,29 @@ class PassExchange:
         return self.root / f"pass-{pass_id}.json"
 
     def save(self, p: Pass) -> Path:
+        """Persist a pass ATOMICALLY, with OPTIMISTIC CONCURRENCY (Medium 13). The
+        old in-place write_text could (a) leave a torn file if the process died
+        mid-write, and (b) silently clobber another actor's update (read-modify-
+        write with no version check). Now: if the on-disk version differs from the
+        one this pass was loaded at, raise PassConflictError (the concurrent update
+        is preserved, not lost); otherwise bump the version and write via a temp
+        file + atomic rename, so a reader never sees a half-written pass."""
+        import os
         path = self._path(p.id)
-        path.write_text(json.dumps(p.to_dict(), indent=2, ensure_ascii=False),
-                        encoding="utf-8")
+        if path.exists():
+            try:
+                on_disk = int(json.loads(path.read_text(encoding="utf-8")).get("version", 0))
+            except Exception:
+                on_disk = None
+            if on_disk is not None and on_disk != p.version:
+                raise PassConflictError(
+                    f"pass {p.id} changed on disk (version {on_disk}) since it was "
+                    f"loaded (version {p.version}) — reload, re-apply, and save again; "
+                    "the other update is not clobbered")
+        p.version += 1
+        tmp = path.with_suffix(".json.tmp")
+        tmp.write_text(json.dumps(p.to_dict(), indent=2, ensure_ascii=False), encoding="utf-8")
+        os.replace(tmp, path)          # atomic — a reader sees the old or new file, never a torn one
         return path
 
     def load(self, pass_id: str) -> Pass:
