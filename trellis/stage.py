@@ -37,10 +37,9 @@ except ImportError:  # pragma: no cover
     fcntl = None
 
 from .clock import TimeGround
-from .identity import (InvalidIdentityError, is_effectively_blank,
-                       require_identity, same_identity)
+from .identity import (InvalidIdentityError, require_identity, same_identity)
 from .ledger import Ledger
-from .surfaces import ConversationKey
+from .surfaces import ConversationKey, Surface, ThreadRef
 
 
 class ActionStatus(str, Enum):
@@ -86,6 +85,41 @@ class StagedAction:
             f"{self.kind}\x1f{self.target}\x1f{self.content}".encode("utf-8")).hexdigest()[:16]
 
 
+def _destination_to_body(dest: Optional[ConversationKey]) -> Optional[dict]:
+    """Serialize the full structured destination for the ledger (D26, Codex#16):
+    the routing metadata must survive a restart, not be dropped to None."""
+    if dest is None:
+        return None
+    d = {"agent": dest.agent, "surface": dest.surface.value,
+         "scope": dest.scope, "human": dest.human}
+    if dest.thread is not None:
+        d["thread"] = {"id": dest.thread.id,
+                       "parent_channel": dest.thread.parent_channel,
+                       "parent_message": dest.thread.parent_message}
+    return d
+
+
+def _destination_from_body(d: Optional[dict]) -> Optional[ConversationKey]:
+    """Reconstruct a ConversationKey persisted by _destination_to_body. A body
+    that no longer maps to a known Surface is dropped to None rather than guessed
+    — an unroutable destination is not fabricated."""
+    if not d:
+        return None
+    try:
+        surface = Surface(d.get("surface"))
+    except ValueError:
+        return None
+    thread = None
+    td = d.get("thread")
+    if td:
+        thread = ThreadRef(id=td.get("id", ""),
+                           parent_channel=td.get("parent_channel", ""),
+                           parent_message=td.get("parent_message"))
+    return ConversationKey(agent=d.get("agent", ""), surface=surface,
+                           scope=d.get("scope", ""), human=d.get("human", ""),
+                           thread=thread)
+
+
 class Outbox:
     """The one gate between an agent and the world — durable and idempotent."""
 
@@ -97,13 +131,44 @@ class Outbox:
 
     # ----- reconstruction (the ledger is the source of truth) ----------------
 
+    @staticmethod
+    def _event_status(body: dict) -> Optional[ActionStatus]:
+        """The lifecycle status a single staged_action event settles the action
+        into, or None if the event carries no status. `reconciled` and
+        `fire_unknown` map by their event name (the ledger body's `status` for a
+        reconcile is already correct, but naming keeps the fold explicit)."""
+        ev = body.get("event", "staged")
+        if ev == "reconciled":
+            return ActionStatus.FIRED if body.get("reconciled_fired") else ActionStatus.APPROVED
+        if ev == "fire_unknown":
+            return ActionStatus.UNKNOWN
+        raw = body.get("status")
+        if raw is None:
+            return None
+        try:
+            return ActionStatus(raw)
+        except ValueError:
+            return ActionStatus.STAGED
+
+    @staticmethod
+    def _event_approver(e) -> Optional[str]:
+        """The human who approved, retained as the transition actor (Codex#16):
+        an explicit `approved_by`/`by` if present, else the ledger author of the
+        `approved` event (the web UI writes no `approved_by` field)."""
+        return e.body.get("approved_by") or e.body.get("by") or e.author
+
     def _load(self) -> None:
         """Rebuild every action's payload + current status from the ledger's
-        staged_action events. The payload comes from the `staged` event; the
-        status from the latest event per action_id (which the web UI also writes,
-        so there is no split-brain)."""
+        staged_action events. The payload (incl. the FULL structured destination)
+        comes from the `staged` event; the status is FOLDED across every event per
+        action_id in ledger order (the web UI also writes events, so there is no
+        split-brain). The approving actor is retained from the `approved`
+        transition — never dropped to None (Codex#16)."""
         payloads: dict[str, dict] = {}
-        latest: dict[str, tuple] = {}   # action_id -> (write_time, status, body)
+        order: list[str] = []
+        status: dict[str, ActionStatus] = {}
+        approver: dict[str, Optional[str]] = {}
+        reason: dict[str, Optional[str]] = {}
         for e in self.ledger.entries():
             if e.kind != "staged_action":
                 continue
@@ -112,23 +177,27 @@ class Outbox:
                 continue
             ev = e.body.get("event", "staged")
             if ev in ("staged", None) and e.body.get("kind"):
+                if aid not in payloads:
+                    order.append(aid)
                 payloads[aid] = e.body
-            prev = latest.get(aid)
-            if prev is None or e.stamp.write_time >= prev[0]:
-                latest[aid] = (e.stamp.write_time, e.body.get("status", "staged"), e.body)
-        for aid, pay in payloads.items():
-            wt, status, latest_body = latest.get(aid, (None, "staged", pay))
+            st = self._event_status(e.body)
+            if st is not None:
+                status[aid] = st
+            if ev == "approved":
+                approver[aid] = self._event_approver(e)
+            if ev == "denied":
+                reason[aid] = e.body.get("reason")
+        for aid in order:
+            pay = payloads[aid]
             a = StagedAction(
                 kind=pay.get("kind", "?"), target=pay.get("target", ""),
                 content=pay.get("content", pay.get("content_preview", "")),
                 created_by=pay.get("author_created_by", pay.get("created_by", "?")),
+                destination=_destination_from_body(pay.get("destination")),
                 idempotency_key=pay.get("idempotency_key", ""), id=aid)
-            try:
-                a.status = ActionStatus(status)
-            except ValueError:
-                a.status = ActionStatus.STAGED
-            a.approved_by = latest_body.get("approved_by") or latest_body.get("by")
-            a.denial_reason = latest_body.get("reason")
+            a.status = status.get(aid, ActionStatus.STAGED)
+            a.approved_by = approver.get(aid)
+            a.denial_reason = reason.get(aid)
             self._actions[aid] = a
 
     # ----- agent side -------------------------------------------------------
@@ -143,6 +212,9 @@ class Outbox:
                   "content": action.content,
                   "content_preview": action.content[:280],
                   "content_hash": action.content_hash(),
+                  # FULL structured destination persisted (D26, Codex#16) — the
+                  # routing metadata must survive a restart, not drop to None
+                  "destination": _destination_to_body(action.destination),
                   "idempotency_key": action.idempotency_key,
                   "created_by": action.created_by},
             tags=("outbox", action.kind),
@@ -181,40 +253,72 @@ class Outbox:
                 "approval is the human seat (disguised self-approval was a live "
                 "bypass found in review; identity comparison is normalized now)")
 
+    def _require_status(self, a: StagedAction, allowed: tuple, verb: str) -> None:
+        """Lifecycle-state gate (FableG8): a decided action is not re-decided. Only
+        a STAGED action may be approved; a DENIED / FIRED action can never be
+        resurrected to approved and fired. Without this, `deny → approve → fire`
+        was a live resurrection (both the web guard and the library missed it)."""
+        if a.status not in allowed:
+            raise UnapprovedFireError(
+                f"action {a.id} is {a.status.value}, not "
+                f"{'/'.join(s.value for s in allowed)} — cannot {verb} (a decided "
+                "action is not resurrected: no deny→approve, no re-approve after fire)")
+
     def approve(self, action_id: str, human: str) -> None:
         a = self._require(action_id)
         self._require_approver(human, a.created_by)
+        self._require_status(a, (ActionStatus.STAGED,), "approve")
+        # persist FIRST, then mutate the cache (Codex#2): a failed approval append
+        # must never leave a fireable action with zero durable yes. On persistence
+        # failure the cache is rolled back, and fire() re-derives approval from the
+        # ledger regardless — the cache is never the authority.
+        prev_status, prev_approved = a.status, a.approved_by
         a.status = ActionStatus.APPROVED
         a.approved_by = human
-        self._log(a, human, "approved", approved_by=human)
+        try:
+            self._log(a, human, "approved", approved_by=human)
+        except BaseException:
+            a.status, a.approved_by = prev_status, prev_approved
+            raise
 
     def deny(self, action_id: str, human: str, reason: str) -> None:
         a = self._require(action_id)
         self._require_approver(human, a.created_by)
+        # denial is a pre-world act: allowed while STAGED or (cancelling) APPROVED,
+        # never after firing/fired/unknown (that outcome is a reconcile, not a deny).
+        self._require_status(a, (ActionStatus.STAGED, ActionStatus.APPROVED), "deny")
+        prev_status, prev_reason = a.status, a.denial_reason
         a.status = ActionStatus.DENIED
         a.denial_reason = reason
-        self._log(a, human, "denied", reason=reason)
+        try:
+            self._log(a, human, "denied", reason=reason)
+        except BaseException:
+            a.status, a.denial_reason = prev_status, prev_reason
+            raise
 
     # ----- the world side ----------------------------------------------------
 
-    def _fire_block(self, action_id: str) -> Optional[str]:
-        """The idempotency check — from the LEDGER, not just memory. Returns the
-        blocking state ('firing' in-flight, or 'fired' done) if this action must
-        NOT be fired, else None. A crash after the firing intent leaves 'firing'
-        on record → blocked (no blind retry of a side effect that may have reached
-        the world). A human `reconcile(fired=False)` — 'it did NOT go out' — CLEARS
-        the block, so exactly one clean retry is allowed; `reconcile(fired=True)`
-        settles it as fired (stays blocked)."""
-        state: Optional[str] = None
+    def _ledger_state(self, action_id: str) -> tuple:
+        """Reconstruct the LATEST authoritative lifecycle state for one action by
+        folding its staged_action events in ledger order — the source of truth for
+        authorization (Codex#1/#2). fire() authorizes from THIS, never from the
+        instance cache: a stale Outbox that still holds a cached APPROVED must not
+        fire an action another process has since denied or already fired.
+
+        A `reconcile(fired=False)` folds to APPROVED — CLEARING an in-flight block
+        so exactly one clean retry is allowed; `reconcile(fired=True)` folds to
+        FIRED and stays blocked. Returns (status, approver)."""
+        status: Optional[ActionStatus] = None
+        approver: Optional[str] = None
         for e in self.ledger.entries():
             if e.kind != "staged_action" or e.body.get("action_id") != action_id:
                 continue
-            ev = e.body.get("event")
-            if ev in ("firing", "fired"):
-                state = ev
-            elif ev == "reconciled":
-                state = "fired" if e.body.get("reconciled_fired") else None
-        return state
+            st = self._event_status(e.body)
+            if st is not None:
+                status = st
+            if e.body.get("event") == "approved":
+                approver = self._event_approver(e)
+        return status, approver
 
     def fire(self, action_id: str, executor: Callable[[StagedAction], None]) -> None:
         """Execute an APPROVED action via the provided executor, exactly once.
@@ -233,19 +337,26 @@ class Outbox:
         # once still needs the transactional ledger (Codex High 6); by design only
         # the harness fires, so this is defense-in-depth.
         with self._fire_lock():
-            # idempotency FIRST: an action already firing/fired is refused outright,
-            # so a crash-then-retry (or a fire on UNKNOWN awaiting reconcile) can't
-            # double-send. reconcile(fired=False) clears this for one clean retry.
-            prior = self._fire_block(action_id)
-            if prior is not None:
+            # Authorize from the LEDGER (the source of truth), NEVER the instance
+            # cache (Codex#1/#2): re-derive the latest authoritative lifecycle state
+            # under the lock. A stale cached APPROVED, a denial another process
+            # recorded, and a failed approval append all resolve correctly here.
+            status, approver = self._ledger_state(action_id)
+            # idempotency FIRST: an action already firing/fired/unknown is refused
+            # outright, so a crash-then-retry (or a fire on UNKNOWN awaiting
+            # reconcile) can't double-send. reconcile(fired=False) folds back to
+            # APPROVED, clearing this for one clean retry.
+            if status in (ActionStatus.FIRING, ActionStatus.FIRED, ActionStatus.UNKNOWN):
                 raise DoubleFireError(
-                    f"action {action_id} already recorded a '{prior}' — refusing to fire "
-                    "again (a side effect that may have reached the world is not blindly "
-                    "retried; reconcile the outcome instead)")
-            if a.status != ActionStatus.APPROVED:
+                    f"action {action_id} is '{status.value}' in the ledger — refusing to "
+                    "fire again (a side effect that may have reached the world is not "
+                    "blindly retried; reconcile the outcome instead)")
+            if status != ActionStatus.APPROVED:
                 raise UnapprovedFireError(
-                    f"action {action_id} is {a.status.value}, not approved — "
-                    "nothing fires without a human's yes")
+                    f"action {action_id} is {status.value if status else 'unstaged'} in "
+                    "the ledger, not approved — nothing fires without a human's durable yes")
+            # sync the cache to the ledger truth before recording intent
+            a.approved_by = approver or a.approved_by
             # durable INTENT before the side effect (so a crash here is recoverable)
             a.status = ActionStatus.FIRING
             self._log(a, a.approved_by or "?", "firing", idempotency_key=a.idempotency_key)
@@ -282,9 +393,11 @@ class Outbox:
             raise UnapprovedFireError(
                 f"action {action_id} is {a.status.value}, not unknown/firing — "
                 "nothing to reconcile")
-        if is_effectively_blank(human):
-            raise UnapprovedFireError("reconciliation names the human who checked the world")
-        require_identity(human, "reconciler")
+        # SAME independence gate as approval (Codex#3): reconciliation is a human
+        # seat. The staging agent cannot reconcile its OWN ambiguous send — that
+        # was a live self-resolution that let a retry double-send. Authenticated
+        # ASCII human, and maker != reconciler; fail-closed if we cannot verify.
+        self._require_approver(human, a.created_by)
         a.status = ActionStatus.FIRED if fired else ActionStatus.APPROVED
         self._log(a, human, "reconciled", reconciled_fired=fired, note=note)
 
