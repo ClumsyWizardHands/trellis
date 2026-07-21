@@ -1,6 +1,6 @@
 # STRESS REPORT
 
-run: 2026-07-17T18:05:26+00:00 · python 3.11.15 · seed 20260715 (deterministic chaos)
+run: 2026-07-21T21:12:26+00:00 · python 3.11.13 · seed 20260715 (deterministic chaos)
 result: **10/10 attacks defeated**
 
 The suite's stance is the verifier's stance: each scenario ATTACKS one of
@@ -8,21 +8,21 @@ the harness's refusals. A pass means the attack failed. Evidence below is
 recorded, not narrated.
 
 ## ✅ scale: 5k ledger entries — append, supersede, search, as_of
-took 11.259s
+took 0.429s
 ```json
 {
   "entries": 5000,
   "corrections": 100,
-  "append_s": 0.2,
-  "correct_s": 10.87,
-  "search_s": 0.076,
-  "current_s": 0.037,
+  "append_s": 0.39,
+  "correct_s": 0.02,
+  "search_s": 0.013,
+  "current_s": 0.0,
   "file_mb": 1.0
 }
 ```
 
 ## ✅ session death: 200 chaotic runs — zero silent failures possible
-took 0.034s
+took 0.035s
 ```json
 {
   "runs": 200,
@@ -44,7 +44,7 @@ took 0.034s
 ```
 
 ## ✅ time attack: skewed, future, and ancient events never read as current
-took 0.012s
+took 0.005s
 ```json
 {
   "annotations_checked": 2000,
@@ -53,7 +53,7 @@ took 0.012s
 ```
 
 ## ✅ pass fuzz: 3000 random transitions — illegal ones always refused, none lost
-took 0.031s
+took 0.015s
 ```json
 {
   "transitions_attempted": 3000,
@@ -65,7 +65,7 @@ took 0.031s
 ```
 
 ## ✅ privacy fuzz: 5000 random flows — DM->public always blocked without a token
-took 0.021s
+took 0.008s
 ```json
 {
   "flows": 5000,
@@ -75,7 +75,7 @@ took 0.021s
 ```
 
 ## ✅ self-certification: 100 disguise attempts all refused
-took 0.019s
+took 0.004s
 ```json
 {
   "disguise_attempts": 400,
@@ -84,7 +84,7 @@ took 0.019s
 ```
 
 ## ✅ sycophancy pressure: T-shaped maybes refused; hidden nos surface
-took 0.005s
+took 0.002s
 ```json
 {
   "fake_Ts_refused": 200,
@@ -93,7 +93,7 @@ took 0.005s
 ```
 
 ## ✅ witness under a garbage model: 30 cycles of fluff produce zero fake decisions
-took 0.131s
+took 0.033s
 ```json
 {
   "cycles": 30,
@@ -105,7 +105,7 @@ took 0.131s
 ```
 
 ## ✅ concurrency: 8 threads x 500 appends — ledger stays readable, nothing lost
-took 0.516s
+took 0.351s
 ```json
 {
   "threads": 8,
