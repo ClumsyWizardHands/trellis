@@ -313,9 +313,21 @@ class ContextCompiler:
                             mandatory=True))
 
         # (4) RELEVANT DECISIONS — relevance-scored, budget-bounded.
+        # A CONTESTED decision (an independent verifier REFUTED it — D35) is
+        # dropped from the trusted read the next cycle compiles: it stays on the
+        # record (append-only, still ledger.active) but must not silently ground a
+        # fresh opinion while it awaits human resolution. The exclusion is
+        # manifested, so a bad-but-refuted decision can't hide in the packet.
+        from .verify import contested_items
+        contested = {c.get("subject_id") for c in contested_items(self.ledger)}
         scored = []
         for e in self.ledger.active("decision"):
             if e.id in {i.source_id for i in chosen}:
+                continue
+            if e.id in contested:
+                man.excluded.append({"source_id": e.id, "type": "decision",
+                                     "reason": "contested — an independent verifier "
+                                     "refuted it; withheld from the trusted read (D35)"})
                 continue
             subj = e.body.get("subject", "")
             score = _overlap(want, _kw(subj)) if want else 0

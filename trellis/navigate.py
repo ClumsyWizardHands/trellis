@@ -27,14 +27,33 @@ from typing import Optional
 
 from .decisions import (CollidingDecisionError, Decision, DecisionLog, Verdict,
                         question_key)
+from .identity import is_independent
 from .ledger import Entry, Ledger
 from .memory import Workspace
 
 
 class ReopenRequiredError(Exception):
-    """DECIDE hit a live Y/N on the same question. You cannot silently flip a
-    settled answer — reopen() it (recording the trigger), then resolve() with
-    the new decision, so the change carries lineage."""
+    """DECIDE hit a live Y/N on the same question and was NOT asked to act
+    autonomously. You cannot silently flip a settled answer — reopen() it
+    (recording the trigger), then resolve() with the new decision, so the change
+    carries lineage. This is the default; the Witness passes autonomous=True (D33)
+    to change its OWN mind without a human in the loop."""
+
+
+class HighStakesEscalation(Exception):
+    """An autonomous revision hit the ONE minimal high-stakes class (D33):
+    reversing/superseding a decision a HUMAN affirmed or ratified. The agent
+    revises its own opinions freely, but it does NOT auto-reverse a human's
+    seal — that escalates to a human. Nothing is written on this path; the head
+    is left intact for the human to weigh in."""
+
+    def __init__(self, decision: Decision, head: Entry):
+        self.decision = decision
+        self.head = head
+        super().__init__(
+            f"reversing {decision.subject!r} would supersede a human-affirmed "
+            f"decision ({head.body.get('decision_id')}) — escalate to a human. "
+            "The agent does not auto-reverse a human's ratification (D33).")
 
 
 @dataclass(frozen=True)
@@ -143,22 +162,67 @@ class Navigator:
     # ----- DECIDE (commit, anti-fork) ----------------------------------------
 
     def decide(self, decision: Decision,
-               event_time: Optional[datetime] = None) -> Entry:
+               event_time: Optional[datetime] = None, *,
+               autonomous: bool = False, trigger: Optional[str] = None,
+               author: Optional[str] = None) -> Entry:
         """Commit a Y/N/T. Brand-new question → record. Live `T` on the same
-        question → resolve it (supersede, with lineage). Live Y/N on the same
-        question → REFUSE: reopen()+resolve() is the only lineage-preserving way
-        to change a settled answer. This is what enforces 'divergence records,
-        never a silent flip'."""
-        qk = question_key(decision.subject)
+        question → resolve it (supersede, with lineage).
+
+        Live Y/N on the same question:
+          * autonomous=False (default) → REFUSE (ReopenRequiredError). The old
+            contract, kept for callers that want the human-gated flip.
+          * autonomous=True (D33) → the agent changes its OWN mind on its OWN
+            authority: an IDENTICAL repeat is an idempotent no-op; a decision a
+            HUMAN affirmed escalates (HighStakesEscalation, the one minimal
+            high-stakes class); otherwise it autonomously reopens (logging the
+            trigger) and supersedes the head — ONE live head, full lineage, and
+            the change visible on the record. Divergence still RECORDS; it just
+            no longer requires a human to record it.
+
+        The question identity is effective_key() (an explicit obs:/op: key wins
+        over the subject slug) — so a keyed opinion reworded on the same key folds
+        onto its head instead of missing it and forking (the record() collision)."""
+        qk = decision.effective_key()
         head = self.cache.head(qk) or self.log.active_head(qk)
         if head is None:
             return self.log.record(decision, event_time=event_time)
         if head.body.get("verdict") == Verdict.T.value:
             return self.log.resolve(head.body["decision_id"], decision)
-        raise ReopenRequiredError(
-            f"{decision.subject!r} already has a live {head.body.get('verdict')} "
-            f"decision ({head.body.get('decision_id')}). Reopen it with the "
-            "trigger, then resolve() — do not mint a second live head.")
+        if not autonomous:
+            raise ReopenRequiredError(
+                f"{decision.subject!r} already has a live {head.body.get('verdict')} "
+                f"decision ({head.body.get('decision_id')}). Reopen it with the "
+                "trigger, then resolve() — do not mint a second live head.")
+        if self._is_identical(head, decision):
+            return head                              # idempotent no-op — nothing changed
+        if self._head_is_human_ratified(head):
+            raise HighStakesEscalation(decision, head)
+        # autonomous mind-change: reopen (log WHY) then supersede (keep lineage).
+        did = head.body["decision_id"]
+        self.log.reopen(did, trigger or "the agent revised its own opinion (D33)",
+                        author or decision.author, event_time=event_time)
+        return self.log.resolve(did, decision)
+
+    @staticmethod
+    def _is_identical(head: Entry, decision: Decision) -> bool:
+        """A repeat that changes nothing meaningful — same wording, same verdict,
+        same rationale. Superseding it would only churn the record, so it no-ops."""
+        return (head.body.get("subject") == decision.subject
+                and head.body.get("verdict") == decision.verdict.value
+                and head.body.get("rationale") == decision.rationale)
+
+    def _head_is_human_ratified(self, head: Entry) -> bool:
+        """Did a HUMAN affirm/ratify this head? The web /affirm records an
+        `affirmation` entry naming the decision_id; a human seal by a party
+        INDEPENDENT of the maker makes reversing it the high-stakes class (an
+        agent affirming its own head cannot lock itself out of revising it)."""
+        did = head.body.get("decision_id")
+        maker = head.author
+        for e in self.log.ledger.entries():
+            if (e.kind == "affirmation" and e.body.get("decision_id") == did
+                    and is_independent(maker, e.author)):
+                return True
+        return False
 
     def resolve(self, decision_id: str, resolution: Decision) -> Entry:
         """Promote/settle: supersede an existing head (a hidden-no T, or a

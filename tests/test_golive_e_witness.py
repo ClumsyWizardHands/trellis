@@ -74,17 +74,19 @@ def test_repeated_opinion_does_not_crash_and_does_not_fork(emp, key, ledger, tmp
     assert out1 == Outcome.OK
     assert len(ledger.current("decision")) == 1
 
-    # The SAME batch again: DecisionLog.record() raises CollidingDecisionError.
-    # It must be caught per-opinion — the cycle survives, no second live head is
-    # minted, and the skip is on the record (nothing silently lost).
+    # The SAME opinion again (identical verdict + rationale). Under D33 the agent
+    # revisits freely on its own authority: an identical re-affirmation is a clean
+    # idempotent no-op — the cycle survives, no second live head is minted, and there
+    # is no 'skipped' block. (The Phase-1 stopgap recorded an opinion_skipped entry
+    # because it BLOCKED the repeat; D33 replaces that block with autonomous handling.
+    # A genuine CHANGE of mind supersedes the head and is logged — see
+    # tests/test_p2op_mind.py.)
     w.provider.enqueue_text(json.dumps(_one_opinion()))
     out2 = w.witness_cycle(events)          # must NOT raise
 
     assert len(ledger.current("decision")) == 1, "a second live head is a silent fork"
-    skipped = [e for e in ledger.entries() if e.kind == "opinion_skipped"]
-    assert len(skipped) == 1
-    assert "collide" in skipped[0].body["reason"].lower() or \
-           "reopen" in skipped[0].body["reason"].lower()
+    assert not [e for e in ledger.entries() if e.kind == "opinion_skipped"], \
+        "D33: the block-and-skip stopgap is gone — an identical repeat is a no-op"
     assert out2 in (Outcome.OK, Outcome.NOTHING_NEW)
 
 

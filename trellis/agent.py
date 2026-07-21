@@ -39,13 +39,14 @@ from .emp import EMP
 from .ledger import Ledger
 from .loops import Budget, LoopRegistry, LoopRun, LoopSpec, Outcome
 from .memory import Workspace
+from .navigate import HighStakesEscalation, Navigator
 from .passes import PassExchange
 from .prompt import assemble_prompt
 from .providers.base import Provider, ProviderResponse
 from .stage import Outbox, StagedAction
 from .surfaces import ConversationKey
 from .verify import (CompletionClaim, Evidence, EvidenceKind, RuleVerifier,
-                     record_verdict)
+                     Verifier, convene_verification, record_verdict)
 
 
 @dataclass(frozen=True)
@@ -96,6 +97,7 @@ class Witness:
         ground: Optional[TimeGround] = None,
         verifier: Optional[RuleVerifier] = None,
         budget: Optional["Budget"] = None,
+        decision_verifier: Optional[Verifier] = None,
     ):
         self.emp = emp
         self.provider = provider
@@ -106,6 +108,13 @@ class Witness:
         self.ground = ground or ledger.ground
         self.budget = budget            # optional real resource bound (High 10)
         self.decisions = DecisionLog(ledger, self.ground)
+        # the three-verb grammar over the log — opinions record through decide()
+        # so a changed opinion autonomously reopens+supersedes (D33), never crashes.
+        self.navigator = Navigator(self.decisions, workspace)
+        # the INDEPENDENT cheap seat that verifies each decision WRITE broadly (D34).
+        # Optional so existing callers are unchanged; when set, every recorded or
+        # superseded decision is convened past it and the verdict recorded.
+        self.decision_verifier = decision_verifier
         self.loops = LoopRegistry(ledger, self.ground)
         self.outbox = Outbox(ledger, self.ground)
         self.id = f"witness:{emp.name.lower().replace(' ', '-')}"
@@ -158,28 +167,36 @@ class Witness:
                         tags=("witness", "rejected"))
                     continue
                 d = self._to_decision(op)
+                # D33: record through decide(autonomous=True) so a CHANGED opinion
+                # reopens+supersedes the prior head on the agent's OWN authority —
+                # a logged, one-live-head supersession, not a crash and not a fork.
+                # A human enters only for the minimal high-stakes class (reversing a
+                # human-affirmed decision).
+                prior_head = self.decisions.active_head(d.effective_key())
                 try:
-                    entry = self.decisions.record(d)
-                    recorded.append(entry.id)
-                except CollidingDecisionError as e:
-                    # FAIL-CLOSED-BUT-ALIVE (FableG2): a live head already answers
-                    # this question. Changing a live answer must go through
-                    # reopen()/resolve() with lineage — which collision policy
-                    # (reopen vs escalate) is a human decision (see decisions_needed).
-                    # For now: record a typed, ledgered skip so the opinion is not
-                    # silently LOST and no second live head is silently FORKED, and
-                    # let the cycle finish alive instead of the bare
-                    # CollidingDecisionError escaping and crashing the driver
-                    # (loops.py deliberately never swallows).
+                    entry = self.navigator.decide(
+                        d, autonomous=True,
+                        trigger=f"the witness revised its read on {op.subject!r}",
+                        author=self.id)
+                except HighStakesEscalation as esc:
+                    # reversing a human-affirmed decision is NOT autonomous: record an
+                    # escalation for the human and leave the sealed head intact (D33).
                     self.ledger.append(
-                        "opinion_skipped", self.id,
+                        "opinion_escalated", self.id,
                         {"subject": op.subject, "verdict": op.verdict,
                          "emp_lineage": op.emp_lineage,
-                         "reason": "collides with an existing live head; reopen "
-                                   "required to change a live answer on the record",
-                         "detail": str(e)},
-                        tags=("witness", "skipped", "collision"))
+                         "head_decision_id": esc.head.body.get("decision_id"),
+                         "reason": "reversing a human-affirmed decision requires "
+                                   "human approval (high-stakes, D33)",
+                         "detail": str(esc)},
+                        tags=("witness", "escalation", "high-stakes"))
                     continue
+                if prior_head is not None and entry.id == prior_head.id:
+                    continue            # idempotent no-op: an identical repeat
+                recorded.append(entry.id)
+                # D34: machine-verify this decision WRITE past an independent seat.
+                if self.decision_verifier is not None:
+                    self._verify_decision_write(entry, op)
 
             # remember — update the read beside us, then claim
             read_path = self._update_read(sensed, opinions)
@@ -377,6 +394,28 @@ class Witness:
             revisit_at=revisit,
             missing=op.missing,
         )
+
+    def _verify_decision_write(self, entry, op: Opinion) -> None:
+        """Convene independent verification of a decision write (D34: verify
+        broadly — an unverified memory error compounds). A REFUTED verdict marks
+        the decision contested + escalates (D35); it does NOT block the agent from
+        having recorded its opinion (D33). A verifier OUTAGE must not lose the
+        recorded opinion either — the agent recorded on its own authority, so a
+        failed convene is itself ledgered, never silently swallowed."""
+        claim = CompletionClaim(
+            maker=self.id,
+            task=f"decision write {entry.id}",
+            summary=f"[{op.verdict}] {op.subject}",
+            evidence=[Evidence(EvidenceKind.LEDGER, entry.id, expect_kind="decision")])
+        try:
+            convene_verification(self.ledger, claim, self.decision_verifier,
+                                 subject_id=entry.id, subject_kind="decision")
+        except Exception as e:
+            self.ledger.append(
+                "verification_error", getattr(self.decision_verifier, "id", "verifier"),
+                {"claim_id": claim.id, "maker": self.id, "task": claim.task,
+                 "status": "error", "error": repr(e)},
+                tags=("verify", "error", self.id))
 
     def _update_read(self, sensed: list[str], opinions: list[Opinion]) -> str:
         now = self.ground.now()
