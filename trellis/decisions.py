@@ -205,20 +205,27 @@ class DecisionLog:
         # a live answer must go through resolve() (which supersedes, with
         # lineage) — reachable via Navigator.reopen()+resolve or decide().
         qk = decision.effective_key()
-        clash = self.active_head(qk)
-        if clash is not None:
-            raise CollidingDecisionError(
-                f"a live decision already answers {decision.subject!r} "
-                f"(verdict {clash.body.get('verdict')}, id "
-                f"{clash.body.get('decision_id')}). Reopen and resolve it — do "
-                "not mint a second live head (that is a silent re-decide).")
-        return self.ledger.append(
-            kind=self.KIND,
-            author=decision.author,
-            body=decision.to_body(),
-            event_time=event_time,
-            tags=("ynt", decision.verdict.value, decision.emp_lineage),
-        )
+        # The collision check and the append must be ONE critical section across
+        # threads and processes (Codex#5): otherwise two fresh Y/N on the same
+        # question can both read "no live head" and both append, forking the
+        # question into two live heads with no supersession link. write_transaction
+        # serializes check-plus-append on the ledger's file lock; the enclosed
+        # append reuses that same lock.
+        with self.ledger.write_transaction():
+            clash = self.active_head(qk)
+            if clash is not None:
+                raise CollidingDecisionError(
+                    f"a live decision already answers {decision.subject!r} "
+                    f"(verdict {clash.body.get('verdict')}, id "
+                    f"{clash.body.get('decision_id')}). Reopen and resolve it — do "
+                    "not mint a second live head (that is a silent re-decide).")
+            return self.ledger.append(
+                kind=self.KIND,
+                author=decision.author,
+                body=decision.to_body(),
+                event_time=event_time,
+                tags=("ynt", decision.verdict.value, decision.emp_lineage),
+            )
 
     def resolve(self, decision_id: str, resolution: Decision) -> Entry:
         """Resolve a T (or reopen an N) by superseding it with a new decision.
