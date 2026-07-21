@@ -120,12 +120,39 @@ def _destination_from_body(d: Optional[dict]) -> Optional[ConversationKey]:
                            thread=thread)
 
 
+def act_surface_id(action: StagedAction) -> str:
+    """The surface id an action's send is guarded against (D30/D38). A threaded
+    post is governed by its PARENT CHANNEL (thread ids are dynamic and can't be
+    pre-listed), else the concrete `target`.
+
+    This is the ONE canonical act-surface resolver — stage (stage-time guard),
+    executor (fire-time guard) and the Discord approval gateway all import THIS
+    function, so the surface a send is *guarded against* is always exactly the
+    surface it is *sent to*. Three divergent copies were a real risk: the gateway's
+    used the dynamic thread id and wrongly refused a legitimately allowlisted
+    threaded reply (breaking the D32 channel⇒threads rule on the act side). It
+    lives here, the lowest module the others already import, to avoid a cycle."""
+    dest = action.destination
+    if dest is not None and dest.thread is not None and dest.thread.parent_channel:
+        return dest.thread.parent_channel
+    return action.target
+
+
+_act_surface_id = act_surface_id   # internal alias (stage-time guard call site)
+
+
 class Outbox:
     """The one gate between an agent and the world — durable and idempotent."""
 
-    def __init__(self, ledger: Ledger, ground: Optional[TimeGround] = None):
+    def __init__(self, ledger: Ledger, ground: Optional[TimeGround] = None,
+                 iso: Optional[object] = None):
         self.ledger = ledger
         self.ground = ground or ledger.ground
+        # OPTIONAL D30 isolation. When supplied, an action whose target surface is
+        # not on trellis's ACT allowlist is refused at STAGE time (D38: guard at
+        # stage AND fire), so a wrong-surface action can never even reach approval.
+        # Absent (every existing caller) → staging is unguarded, unchanged.
+        self.iso = iso
         self._actions: dict[str, StagedAction] = {}
         self._load()   # reconstruct from the ledger — survive a restart (D26)
 
@@ -203,6 +230,12 @@ class Outbox:
     # ----- agent side -------------------------------------------------------
 
     def stage(self, action: StagedAction) -> str:
+        # D38: guard the act surface at STAGE time too (only when an Isolation is
+        # supplied). A wrong-surface action is refused LOUDLY here — before it can
+        # ever be approved and fired. This ADDS a gate; it does not touch the
+        # approval/fire authorization below. guard_act raises SurfaceNotAllowed.
+        if self.iso is not None:
+            self.iso.allow.guard_act(_act_surface_id(action))
         self._actions[action.id] = action
         self.ledger.append(
             kind="staged_action", author=action.created_by,

@@ -360,7 +360,14 @@ def run_demo(state_dir: "Path", *, out=print) -> None:
 
 
 def _demo_state_dir() -> "Path":
+    import os
     import tempfile
+    # Overridable so tests (and concurrent processes) get an ISOLATED state dir —
+    # a fixed shared path collided when several demos ran at once. The default
+    # stays a stable, human-inspectable location for a single real user.
+    override = os.environ.get("TRELLIS_DEMO_STATE")
+    if override:
+        return Path(override)
     return Path(tempfile.gettempdir()) / "trellis-demo-state"
 
 
@@ -448,6 +455,70 @@ def cmd_run(args: argparse.Namespace) -> int:
     return 0
 
 
+# ---------- discord (the in-Discord approval gesture, D38) ----------
+
+def cmd_discord(args: argparse.Namespace) -> int:
+    """Construct the in-Discord approval gateway from env and (would) run the live
+    loop. This is an OPERATOR step: it needs a trellis-owned bot token (D30) and an
+    explicit ACT allowlist, plus the owner's Discord user id — the only id whose
+    reaction may approve. It never connects or sends on import or in tests; without
+    the required config it prints exactly what is missing and returns, and even
+    fully configured it stops at the live-connection seam (unbuilt on purpose)."""
+    config.load_dotenv()
+    from .isolation import Isolation
+    from .ledger import Ledger
+    from .registry import IdentityRegistry
+    from .stage import Outbox
+    from .discord_gateway import (ApprovalGateway, DiscordGatewayConnection,
+                                  make_discord_send_executor)
+
+    token = os.environ.get("TRELLIS_DISCORD_TOKEN", "").strip()
+    owner = os.environ.get("TRELLIS_APPROVER_DISCORD_ID", "").strip()
+    iso = Isolation.from_env()
+    missing = []
+    if not token:
+        missing.append("TRELLIS_DISCORD_TOKEN (a trellis-OWNED bot token, D30)")
+    if not owner:
+        missing.append("TRELLIS_APPROVER_DISCORD_ID (the owner's Discord user id — "
+                       "the only reactor whose ✅ approves)")
+    if not iso.allow.act:
+        missing.append("TRELLIS_ACT_SURFACES (the ACT allowlist — where trellis may send)")
+    if missing:
+        print("trellis discord — the in-Discord approval gesture is not configured yet:\n",
+              file=sys.stderr)
+        for m in missing:
+            print(f"  ✗ set {m}", file=sys.stderr)
+        print("\nNothing connects or sends until these are set. The approval MAPPING "
+              "is already built and unit-tested (ApprovalGateway); this entrypoint only "
+              "wires it to the live gateway once you provide the bot token + allowlist.",
+              file=sys.stderr)
+        return 1
+
+    # Construct the gateway (no network here). The send path is guard_act-gated
+    # (D30); the live socket is injected by the operator, so production supplies a
+    # real urllib `sender` — never in tests.
+    ledger = Ledger(config.ledger_path())
+    outbox = Outbox(ledger)
+    registry = IdentityRegistry(ledger)
+
+    def _urllib_sender(action, surface):  # pragma: no cover - production network path
+        raise NotImplementedError(
+            "wire the production stdlib-urllib Discord send here (POST to the "
+            "channel/thread `surface`); it is the only place bytes leave the machine, "
+            "and it is reached only AFTER guard_act has allowlisted the surface.")
+
+    executor = make_discord_send_executor(iso, sender=_urllib_sender)
+    gateway = ApprovalGateway(ledger=ledger, iso=iso, registry=registry, outbox=outbox,
+                              executor=executor, approver_discord_id=owner)
+    print("trellis discord — gateway constructed "
+          f"(owner={owner}, {len(iso.allow.act)} act surface(s)). "
+          "Every send still stays staged for the owner's ✅ (refusal #5 / W3).")
+    # The live websocket loop is the operator seam — it requires the real bot
+    # client and is not opened here.
+    DiscordGatewayConnection(gateway, bot_token=token).run()
+    return 0
+
+
 # ---------- web ----------
 
 def cmd_web(args: argparse.Namespace) -> int:
@@ -479,10 +550,13 @@ def main(argv=None) -> int:
     w = sub.add_parser("web", help="launch the read-only portal ([web] extra)")
     w.add_argument("rest", nargs=argparse.REMAINDER,
                    help="args passed through to trellis-web (e.g. --port 8001)")
+    sub.add_parser("discord", help="run the in-Discord approval gesture "
+                                   "(needs a trellis-owned bot token + ACT allowlist)")
 
     args = ap.parse_args(argv)
     return {"init": cmd_init, "doctor": cmd_doctor, "demo": cmd_demo,
-            "tick": cmd_tick, "run": cmd_run, "web": cmd_web}[args.cmd](args)
+            "tick": cmd_tick, "run": cmd_run, "web": cmd_web,
+            "discord": cmd_discord}[args.cmd](args)
 
 
 if __name__ == "__main__":  # pragma: no cover

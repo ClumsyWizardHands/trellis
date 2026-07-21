@@ -174,6 +174,9 @@ def test_demo_runs_twice_from_a_bare_cwd(monkeypatch, tmp_path, capsys):
     # succeed twice without a CollidingDecisionError on the second run.
     from trellis import cli
     monkeypatch.chdir(tmp_path)
+    # isolate the demo state dir from other tests / concurrent processes (the
+    # default is a shared global temp path — a cross-process collision otherwise).
+    monkeypatch.setenv("TRELLIS_DEMO_STATE", str(tmp_path / "demo-state"))
     rc1 = cli.cmd_demo(argparse.Namespace(fresh=False))
     rc2 = cli.cmd_demo(argparse.Namespace(fresh=False))
     assert rc1 == 0
@@ -185,4 +188,5 @@ def test_demo_runs_twice_from_a_bare_cwd(monkeypatch, tmp_path, capsys):
 def test_demo_fresh_flag(monkeypatch, tmp_path):
     from trellis import cli
     monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("TRELLIS_DEMO_STATE", str(tmp_path / "demo-state"))
     assert cli.cmd_demo(argparse.Namespace(fresh=True)) == 0
