@@ -986,11 +986,15 @@ explicitly ratified. See "flag" below.)**
    sequencing for a *private* server, where the blast radius is the owner's own community.
 
 **Consequence:** the phase plan collapses — build ingestion, the agency-preserving mind-change,
-broad verification, the runner, and the executor toward one private-server launch. **Flag for
-explicit confirmation:** whether the agent may *auto-post* to Discord, or continues to *stage for
-the owner's yes* (refusal #5). Default and recommendation: keep the human yes on outbound; make it
-autonomous only on an explicit ratification (it is the least-reversible property and the product's
-headline promise).
+broad verification, the runner, and the executor toward one private-server launch.
+
+**Flag RESOLVED (Alex, 2026-07-21):** the agent does **not** auto-post — *every* outbound stays
+staged for the owner's yes (refusal #5 / W3 stand fully, even for DM self-updates). The one change
+is the **approval surface**: the yes now happens **in Discord** (a reaction/command on the staged
+proposal), not only in the web portal — "most of the interaction is going to be in Discord, so it
+should go in Discord." The executor is still built so it *can* post; it simply never fires without
+the Discord yes. Consequence: build a Discord approval gesture (reaction/command → the same
+authenticated, maker≠approver, lifecycle-gated `Outbox.approve/fire` path the portal uses).
 
 ---
 
@@ -1004,9 +1008,10 @@ headline promise).
   real bus is Discord + files. Revisit if an external ally demands it. [FIELD]
 - **W3 — No autonomous outbound.** Standing "proposed no" (Clare, 2026-06-16: "before
   we send swarms out into the internet"). Stage-don't-fire until the team ratifies
-  otherwise. *Revisited by [[D38]] (2026-07-21): the executor gets built and turned on
-  for a private server, but W3 (the human yes on each send) STILL STANDS — D38 explicitly
-  flags autonomous auto-post as needing its own explicit ratification, not yet given.*
+  otherwise. *Revisited and CONFIRMED-STANDING by [[D38]] (2026-07-21): the executor gets
+  built and turned on for a private server, but every send stays staged for the owner's
+  yes — Alex ratified full staging, no auto-post. The only change: the yes now happens in
+  Discord (reaction/command), not just the web portal.*
 - **W4 — Memory-on-agent (Clare's mount-everything direction) not adopted.** The
   Brett/Clare fork is live; trellis takes Brett's side (memories beside, agent dies)
   because [MEM]+[FIELD]+[AUDIT] all point that way — but the fork is named in the
