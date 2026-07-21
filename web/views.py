@@ -13,6 +13,7 @@ from typing import Optional
 
 from trellis.clock import TimeGround
 from trellis.ledger import Ledger
+from trellis.verify import trust_record
 
 
 def _ground(ledger: Ledger, ground: Optional[TimeGround]) -> TimeGround:
@@ -47,8 +48,12 @@ def roster(ledger: Ledger, ground: Optional[TimeGround] = None) -> list[dict]:
                     agents[maker]["refuted"] += 1
     out = []
     for r in agents.values():
-        checked = r["verified"] + r["refuted"]
-        r["trust"] = round(r["verified"] / checked, 2) if checked else None
+        # Trust comes from the ONE canonical function (Codex#18 / Fable four-
+        # formulas): verify.trust_record — which counts PRECONDITIONS_PASSED in the
+        # denominator so "evidence openable" can't inflate trust, and makes /agents
+        # agree with /verification. Never recompute trust here.
+        ratio = trust_record(ledger, r["agent"])["verified_ratio"]
+        r["trust"] = round(ratio, 2) if ratio is not None else None
         r["last_seen"] = g.age_phrase(r["last"])
         r["last"] = r["last"].isoformat()
         out.append(r)
@@ -133,6 +138,10 @@ def inbox(ledger: Ledger, ground: Optional[TimeGround] = None) -> list[dict]:
             "kind": e.body.get("kind"),
             "target": e.body.get("target"),
             "preview": e.body.get("content_preview", ""),
+            # the FULL payload the human actually vouches for (D26, VISUAL-TOUR):
+            # the preview alone is the injection window staging exists to close, so
+            # the approval card must render this, not just the ≤280-char preview.
+            "content": e.body.get("content", e.body.get("content_preview", "")),
             "event": e.body.get("event", "staged"),
             "status": e.body.get("status", "staged"),
             "by": e.author,
@@ -181,28 +190,43 @@ def approval_guard(ledger: Ledger, action_id: str, human: str) -> Optional[str]:
     if same_identity(human, stager):
         return ("the staging agent cannot approve or deny its own action — "
                 "approval is the human seat, the last step before the world")
+    # Lifecycle-state gate (parity with stage.Outbox._require_status): a DENIED,
+    # FIRED, FIRING or UNKNOWN action must never be re-approved. staging_author
+    # only proves a 'staged' event once EXISTED; without this check a denied
+    # action is resurrectable straight through the human seat (a raw POST to
+    # /approve after a deny — the deny→approve exploit). The current status is
+    # folded from the ledger by the library, so this cannot be spoofed by cache.
+    from trellis.stage import ActionStatus, Outbox
+    action = Outbox(ledger).get(action_id)
+    if action is not None and action.status in (
+            ActionStatus.DENIED, ActionStatus.FIRING,
+            ActionStatus.FIRED, ActionStatus.UNKNOWN):
+        return (f"action {action_id!r} is {action.status.value} — a decided or "
+                "in-flight action cannot be resurrected to approved")
     return None
 
 
 # ---- trust panel: verification outcomes per maker --------------------------
 
 def trust_panel(ledger: Ledger, ground: Optional[TimeGround] = None) -> list[dict]:
-    makers: dict[str, dict] = {}
-    for e in ledger.entries():
-        if e.kind != "verification":
-            continue
-        m = e.body.get("maker")
-        r = makers.setdefault(m, {"maker": m, "verified": 0, "refuted": 0,
-                                  "insufficient": 0})
-        st = e.body.get("status")
-        if st in r:
-            r[st] += 1
+    # One trust source of truth (Codex#18 / Fable four-formulas): every count AND
+    # the ratio come from verify.trust_record, so /verification cannot disagree
+    # with /agents and PRECONDITIONS_PASSED sits honestly in the denominator.
+    makers = {e.body.get("maker") for e in ledger.entries()
+              if e.kind == "verification"}
     out = []
-    for r in makers.values():
-        total = r["verified"] + r["refuted"] + r["insufficient"]
-        r["total"] = total
-        r["trust"] = round(r["verified"] / total, 2) if total else None
-        out.append(r)
+    for m in makers:
+        rec = trust_record(ledger, m)
+        ratio = rec["verified_ratio"]
+        out.append({
+            "maker": m,
+            "verified": rec["verified"],
+            "refuted": rec["refuted"],
+            "insufficient": rec["insufficient"],
+            "preconditions_passed": rec["preconditions_passed"],
+            "total": rec["total"],
+            "trust": round(ratio, 2) if ratio is not None else None,
+        })
     return sorted(out, key=lambda x: x["total"], reverse=True)
 
 
@@ -492,6 +516,11 @@ def improvement_view(ledger: Ledger, ground: Optional[TimeGround] = None) -> dic
     # proposals awaiting the human (not yet ratified/rejected)
     proposals = []
     for e in eng.open_proposals():
+        # FableG8(iii): a REJECTED proposal (disposition "N") must not keep live
+        # ratify/deny buttons. The library open_proposals only excludes "Y", so
+        # defend here too (belt-and-suspenders on the one human-write surface).
+        if e.body.get("disposition") == "N":
+            continue
         pid = e.body.get("proposal_id")
         try:
             eng.can_take_effect(e.id)

@@ -27,11 +27,19 @@ try:
 except ImportError as e:  # pragma: no cover
     raise SystemExit("the web UI needs FastAPI: pip install 'trellis-harness[web]'") from e
 
+from trellis import config
 from trellis.clock import TimeGround
 from trellis.ledger import Ledger
 
 from . import views
 from .glyph import GlyphStats, reflection, render_glyph
+
+# Codex#9: the ledger/auth globals below are created at IMPORT, so the .env that
+# `trellis init` wrote must be loaded FIRST — otherwise `trellis web` AND the
+# direct `trellis-web` entry point both boot ephemeral (default human/ledger,
+# a fresh login token each run), silently ignoring the operator's configuration.
+# load_dotenv never overrides an already-set env var, so an explicit env still wins.
+config.load_dotenv()
 
 LEDGER_PATH = os.environ.get("TRELLIS_LEDGER", "state/ledger.jsonl")
 
@@ -58,12 +66,22 @@ def _principal(request: Request) -> "Principal | None":
 
 def _require_human(request: Request) -> str:
     """The canonical id of the authenticated approver, or 401. This replaces the
-    old caller-supplied `human` form field: authority is now server-verified."""
+    old caller-supplied `human` form field: authority is now server-verified.
+
+    FableG8(ii): run the authenticated id through require_identity at this single
+    choke point, so EVERY web write seat (approve/deny/ratify/reject/affirm) refuses
+    a homoglyph/exotic id rather than guessing it — the library human seats
+    (selfimprove.ratify/reject) don't fold confusables, so we refuse loud here."""
+    from trellis.identity import InvalidIdentityError, require_identity
     p = _principal(request)
     if p is None or not p.authenticated:
         raise HTTPException(status_code=401,
                             detail="not signed in — visit /login and enter the approver token")
-    return p.id
+    try:
+        return require_identity(p.id, "approver")
+    except InvalidIdentityError:
+        raise HTTPException(status_code=400,
+                            detail="approver identity is not a plain ASCII id — refused, not guessed")
 
 
 def esc(x) -> str:
@@ -235,8 +253,18 @@ def _inbox_rows(inbox: list) -> str:
         return '<div class="muted small">No actions waiting for approval. The agent stages; you decide.</div>'
     out = []
     for a in inbox:
+        # FableG8(iv): the human vouches for the FULL payload, not a ≤280-char
+        # preview — the preview is exactly the injection window staging exists to
+        # close. Render the whole persisted payload (expandable) on the approval card.
+        content = a.get("content", a["preview"])
+        truncated = len(content) > len(a["preview"])
+        full = (f'<details{"" if not truncated else " open"}>'
+                f'<summary class="muted small">full payload ({len(content)} chars) — '
+                f'this is what your yes vouches for</summary>'
+                f'<pre style="white-space:pre-wrap;word-break:break-word;margin:6px 0 0">'
+                f'{esc(content)}</pre></details>')
         out.append(f'<div class="row"><div><b>{esc(a["kind"])}</b> → {esc(a["target"])}'
-                   f'<div class="muted small">{esc(a["preview"])}</div>'
+                   f'<div class="muted small">{esc(a["preview"])}</div>{full}'
                    f'<div class="muted small">staged by {esc(a["by"])} · {esc(a["age"])}</div></div>'
                    f'<form method="post" action="/approve" style="display:flex;gap:6px;align-items:center">'
                    f'<input type="hidden" name="action_id" value="{esc(a["action_id"])}">'
@@ -758,11 +786,45 @@ def improvement_page(frag: int = 0):
     return _respond("/improvement", _improvement_body(_ledger()), bool(frag))
 
 
+def _proposal_verified(led: Ledger, entry_id: str) -> "bool | None":
+    """Re-derive from the append-only record whether a proposal carries an
+    INDEPENDENT verified verdict (author != the proposing agent) for its exact
+    claim. None if there is no such proposal. Never trusts the body's own
+    `verified` flag — the record is the authority (parity with can_take_effect)."""
+    from trellis.identity import is_independent
+    from trellis.selfimprove import PROPOSAL_KIND
+    e = led.get(entry_id)
+    if e is None or e.kind != PROPOSAL_KIND:
+        return None
+    claim_id = e.body.get("claim_id")
+    if not claim_id:
+        return False
+    for v in led.entries():
+        if (v.kind == "verification" and v.body.get("claim_id") == claim_id
+                and v.body.get("status") == "verified"
+                and is_independent(e.author, v.author)):
+            return True
+    return False
+
+
 @app.post("/ratify")
 def ratify(request: Request, entry_id: str = Form(...)):
     from trellis.selfimprove import ImprovementEngine, UnverifiedProposalError
     human = _require_human(request)
     led = _ledger()
+    # FableG8(i): refuse to ratify an UNVERIFIED proposal. Without this the human's
+    # yes is a silent dead-end — the proposal leaves the queue but can never take
+    # effect (can_take_effect still requires an independent verified verdict). Say so
+    # loudly instead. Belt-and-suspenders: selfimprove.ratify should require this too.
+    verified = _proposal_verified(led, entry_id)
+    if verified is None:
+        raise HTTPException(status_code=404, detail="no such proposal")
+    if not verified:
+        raise HTTPException(
+            status_code=403,
+            detail=("this proposal has no independent verified verdict on the record — "
+                    "ratifying it would be a dead-end yes (it could never take effect). "
+                    "It must be independently verified first."))
     try:
         ImprovementEngine(led, author="web").ratify(entry_id, human)
     except (UnverifiedProposalError, ValueError) as e:
