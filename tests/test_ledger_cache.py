@@ -36,7 +36,7 @@ def test_an_append_by_another_instance_is_seen(tmp_path, ground):
     assert {e.body["src"] for e in a.entries()} == {"a", "b"}
 
 
-def test_a_rewrite_or_shrink_rebuilds_the_cache(tmp_path, ground):
+def test_a_shrink_rebuilds_the_cache(tmp_path, ground):
     path = tmp_path / "l.jsonl"
     led = Ledger(path, ground)
     led.append("fact", "w", {"i": 0})
@@ -48,6 +48,42 @@ def test_a_rewrite_or_shrink_rebuilds_the_cache(tmp_path, ground):
     path.write_bytes((tmp_path / "src.jsonl").read_bytes())   # smaller content
     got = led.entries()
     assert len(got) == 1 and got[0].body == {"only": True}     # rebuilt from the file
+
+
+def test_file_replacement_is_detected(tmp_path, ground):
+    """A git pull / shared-drive sync / atomic write-and-rename replaces the file
+    (new inode) under a LIVE instance — the cache must rebuild, not serve stale."""
+    import os
+    path = tmp_path / "l.jsonl"
+    led = Ledger(path, ground)
+    led.append("fact", "w", {"v": "old", "pad": "x" * 50})
+    assert led.entries()[0].body["v"] == "old"
+    # build a replacement file of >= size with DIFFERENT content, then atomically rename
+    src = tmp_path / "new.jsonl"
+    other = Ledger(src, ground)
+    other.append("fact", "w", {"v": "new", "pad": "y" * 50})
+    other.append("fact", "w", {"v": "new2", "pad": "z" * 50})
+    os.replace(src, path)                                     # atomic replace → new inode
+    got = led.entries()
+    assert [e.body["v"] for e in got] == ["new", "new2"]      # rebuilt, not stale
+
+
+def test_same_size_in_place_rewrite_is_detected(tmp_path, ground):
+    """An in-place rewrite that keeps the exact byte size (same inode) is caught by
+    the mtime change — the size-only check the verifier broke."""
+    import os, time
+    path = tmp_path / "l.jsonl"
+    led = Ledger(path, ground)
+    led.append("fact", "w", {"v": "aaaa"})
+    line = path.read_bytes()
+    assert led.entries()[0].body["v"] == "aaaa"
+    # overwrite in place with an equal-length line, different content, bump mtime
+    replacement = line.replace(b"aaaa", b"bbbb")
+    assert len(replacement) == len(line)
+    with path.open("wb") as f:
+        f.write(replacement)
+    os.utime(path, ns=(time.time_ns(), time.time_ns() + 10_000_000))  # ensure mtime advances
+    assert led.entries()[0].body["v"] == "bbbb"              # detected, rebuilt
 
 
 def test_corrupt_line_still_raises_and_is_consistent(tmp_path, ground):

@@ -678,12 +678,18 @@ unchanged.
    sees a torn write.
 
 **Consequence:** `trellis/ledger.py` — `_sync_locked()` + a byte offset + an `RLock`; `entries()`
-returns a fresh list off the cache; `append()` only writes (the file stays truth). **Measured
-after:** 10k build 230s → **~10s**; `entries()` 44ms → **~0.03ms**; `active()` 44ms → **~0.9ms**.
-Honest scope: the remaining cost is the O(n) *filter* in `active()`/`active_head` (no longer a
-re-parse) — fine for the real daily workload (append a few/day, read often); an incremental
-question-key→head index for true O(n) writes is the next step, not this one. Tests:
-`test_ledger_cache.py`.
+returns a fresh list off the cache; `append()` only writes (the file stays truth). A cheap stat
+signature `((inode, device), mtime_ns)` forces a full rebuild on any out-of-band edit that could
+violate "bytes below the offset are immutable" — a **replacement** (new inode, as git / rsync /
+atomic write-and-rename produce — the README advertises syncing over git/a shared drive), a
+**shrink**, or a **same-size in-place rewrite** (mtime advanced). **Measured after:** 10k build
+230s → **~10s**; `entries()` 44ms → **~0.03ms**; `active()` 44ms → **~0.9ms**. Honest scope: two
+residuals, both narrow and documented — a same-inode *grow-in-place* rewrite that changes lower
+bytes (which no append-only or sync/replace workflow performs) is not caught; and the remaining
+O(n) *filter* in `active()`/`active_head` (no longer a re-parse) is fine for the daily workload
+(append a few/day, read often), with an incremental question-key→head index the next step. An
+independent verifier confirmed coherence under append-only/multi-instance/concurrency/corrupt/
+shrink and pinned the replacement + same-size-rewrite cases now closed. Tests: `test_ledger_cache.py`.
 
 ---
 

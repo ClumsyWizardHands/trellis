@@ -115,24 +115,45 @@ class Ledger:
         self._lock = threading.RLock()
         self._cache: list[Entry] = []
         self._synced_bytes: int = 0
+        self._filesig = None   # ((inode, device), mtime_ns) at last sync — detects an
+                               # out-of-band file replacement / same-size rewrite
 
     def _sync_locked(self) -> None:
         """Bring the cache up to the file's current end. Must hold self._lock.
-        Parses only the bytes appended since the last sync (each line once); a
-        file smaller than what we've synced (a rewrite/truncate) triggers a full
-        rebuild. A corrupt COMPLETE line raises without advancing the offset or
-        mutating the cache, so the error is consistent across calls and never
-        leaves a half-synced cache (matching the old whole-file-or-raise contract)."""
+        Parses only the bytes appended since the last sync (each line once).
+
+        The cache's one assumption is that bytes below the synced offset are
+        IMMUTABLE — true for the append-only contract this ledger is (append /
+        correct / retire only ever GROW the file by whole lines). A full rebuild
+        is forced whenever that could be violated by an out-of-band edit, detected
+        by a cheap stat signature (the README advertises syncing over git / a
+        shared drive, so a live instance's file can be replaced under it):
+          * the file was REPLACED — a new (inode, device), as git / rsync / an
+            atomic write-and-rename produce → rebuild;
+          * the file SHRANK (size < offset) → rebuild;
+          * a SAME-SIZE in-place rewrite (size unchanged, mtime advanced) → rebuild.
+        The one residual it cannot cheaply catch is a same-inode GROW-in-place
+        rewrite that changes bytes below the offset — which no append-only or
+        sync/replace workflow performs. A corrupt COMPLETE line raises without
+        advancing the offset or mutating the cache, so the error is consistent
+        across calls and never leaves a half-synced cache."""
         try:
-            size = os.path.getsize(self.path)
+            st = os.stat(self.path)
         except FileNotFoundError:
             self._cache = []
             self._synced_bytes = 0
+            self._filesig = None
             return
-        if size < self._synced_bytes:
-            # the file shrank or was rewritten — the offset is meaningless; rebuild.
+        size = st.st_size
+        ino_dev = (st.st_ino, st.st_dev)
+        replaced = self._filesig is not None and self._filesig[0] != ino_dev
+        same_size_rewrite = (self._filesig is not None and size == self._synced_bytes
+                             and size > 0 and st.st_mtime_ns != self._filesig[1])
+        if replaced or size < self._synced_bytes or same_size_rewrite:
+            # the offset is meaningless — the file is not the one we synced. Rebuild.
             self._cache = []
             self._synced_bytes = 0
+        self._filesig = (ino_dev, st.st_mtime_ns)
         if size <= self._synced_bytes:
             return
         with self.path.open("rb") as f:
