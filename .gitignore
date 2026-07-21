@@ -5,3 +5,17 @@ stress/.work/
 examples/.state/
 *.egg-info/
 web/demo/ws/
+
+# secrets — never commit
+.env
+.env.*
+!.env.example
+secrets/
+*.key
+*.pem
+google_client.json
+google_token.json
+
+# runtime state / real ledgers (the demo ledger under web/demo/ stays tracked)
+/state/
+.trellis/

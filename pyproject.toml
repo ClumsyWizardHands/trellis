@@ -10,11 +10,22 @@ authors = [{ name = "Alex Crowell" }]
 dependencies = []
 
 [project.optional-dependencies]
+# Model seats
 claude = ["claude-agent-sdk>=0.1", "anyio>=4"]
+openai = []          # hosted OpenAI + local (Ollama/etc.) run on stdlib urllib — no dep.
+                     # Empty, kept so `pip install 'trellis-harness[openai]'` reads uniformly.
+# Access surfaces
+discord = []         # the read poller is stdlib urllib — no dep. Empty by design.
+obsidian = []        # the vault is plain-file I/O (vault.py) — no dep. Empty by design.
+google = ["google-api-python-client>=2", "google-auth-oauthlib>=1"]  # the one dep-bearing surface
+# Surfaces / dev
 web = ["fastapi>=0.110", "uvicorn>=0.27", "python-multipart>=0.0.9"]
 dev = ["pytest>=8", "httpx>=0.27"]   # httpx: FastAPI TestClient (web auth tests)
+# Convenience aggregate
+all = ["trellis-harness[claude,web,google]"]
 
 [project.scripts]
+trellis = "trellis.cli:main"
 trellis-web = "web.app:main"
 
 [build-system]
