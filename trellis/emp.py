@@ -228,6 +228,22 @@ class EMP:
                 f"identity lint failed (embodiment or performed dread) — {details}")
         return violations
 
+    def node_refs(self) -> set:
+        """The set of VALID lineage references into this EMP — 'EMP:ends[0]',
+        'EMP:principles[2]', … — so a decision's emp_lineage can be checked for
+        referential integrity instead of merely being non-blank (Codex Medium 12)."""
+        refs = set()
+        for section, items in (("ends", self.ends), ("means", self.means),
+                               ("principles", self.principles), ("friction", self.friction)):
+            for i in range(len(items)):
+                refs.add(f"EMP:{section}[{i}]")
+        return refs
+
+    def has_node(self, ref: str) -> bool:
+        """Does `ref` point to a real node in THIS EMP? A decision citing a node
+        that doesn't exist is a fabricated lineage, not a breadcrumb."""
+        return (ref or "").strip() in self.node_refs()
+
     def kernel(self, max_items: int = 5) -> str:
         """The compressed EMP for prompt injection — the '2–3 page game
         cartridge' idea at paragraph scale. Strategy in context beats

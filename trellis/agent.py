@@ -146,6 +146,16 @@ class Witness:
             # ACT — record decisions; stage (never fire) anything outbound
             recorded = []
             for op in opinions:
+                # referential integrity (Medium 12): a decision must cite a REAL EMP
+                # node, not a fabricated one. An opinion citing a node that doesn't
+                # exist is rejected LOUDLY (recorded, never silently minted).
+                if not self.emp.has_node(op.emp_lineage):
+                    self.ledger.append(
+                        "opinion_rejected", self.id,
+                        {"subject": op.subject, "emp_lineage": op.emp_lineage,
+                         "reason": "cites an EMP node that does not exist in the EMP"},
+                        tags=("witness", "rejected"))
+                    continue
                 d = self._to_decision(op)
                 entry = self.decisions.record(d)
                 recorded.append(entry.id)
