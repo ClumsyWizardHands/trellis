@@ -87,8 +87,12 @@ class Budget:
     def exceeded(self, elapsed_seconds: float = 0.0) -> Optional[str]:
         if self.max_wall_seconds is not None and elapsed_seconds > self.max_wall_seconds:
             return f"wall-clock {elapsed_seconds:.0f}s > {self.max_wall_seconds:.0f}s"
-        if self.max_provider_calls is not None and self.spent_provider_calls > self.max_provider_calls:
-            return f"provider calls {self.spent_provider_calls} > {self.max_provider_calls}"
+        # PROSPECTIVE bound (Codex #12): a run is exhausted the moment it has spent
+        # its allotment, not one call past it. `>=` here means max_provider_calls=1
+        # permits exactly one call — with `>` a second call slipped through when
+        # spent == max. The limit is a ceiling on calls made, not on the overage.
+        if self.max_provider_calls is not None and self.spent_provider_calls >= self.max_provider_calls:
+            return f"provider calls {self.spent_provider_calls} >= {self.max_provider_calls}"
         if self.max_tokens is not None and self.spent_tokens > self.max_tokens:
             return f"tokens {self.spent_tokens} > {self.max_tokens}"
         return None
@@ -168,9 +172,21 @@ class LoopRun:
 
     def charge(self, input_tokens: int = 0, output_tokens: int = 0) -> None:
         """Record a provider call's cost against the run's Budget (the Witness calls
-        this after each model turn). If it pushes the run over budget, the next
-        tick() ends the run as BUDGET_EXCEEDED — nested model work is now bounded,
-        not just the outer harness ticks."""
+        this after each model turn). Charging accrues the cost; it does NOT itself
+        end the run. The budget is enforced PROSPECTIVELY by tick(): once the
+        allotment is spent, the NEXT tick() refuses an ADDITIONAL provider call and
+        ends the run BUDGET_EXCEEDED. Nested model work stays bounded — the cap
+        blocks the next call, it does not reach back and invalidate the call that
+        just succeeded.
+
+        Codex#12 residual: charge() USED to mark BUDGET_EXCEEDED the instant it
+        spent the last allowed call. That retroactively relabeled a cycle whose
+        VALID opinion had already been recorded in budget — suppressing run.ok() and
+        skipping the cost-free RuleVerifier, so the recorded decision was left
+        UNVERIFIED. "We just spent our last allowed provider call" must not suppress
+        the free verification of work already completed; BUDGET_EXCEEDED is for a
+        call that is actually BLOCKED with no result (tick() returning False), never
+        for the last allowed call that succeeded."""
         if self.budget is not None:
             self.budget.charge(input_tokens, output_tokens)
 

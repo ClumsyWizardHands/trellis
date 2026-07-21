@@ -15,12 +15,16 @@ def _spec():
 
 
 def test_budget_exceeded_logic():
-    b = Budget(max_wall_seconds=10, max_provider_calls=2, max_tokens=100)
+    # provider-call headroom (10) so this case exercises the WALL and TOKEN bounds;
+    # the provider-call bound is now PROSPECTIVE (>=), tested on its own below.
+    b = Budget(max_wall_seconds=10, max_provider_calls=10, max_tokens=100)
     assert b.exceeded(0) is None
     assert "wall-clock" in b.exceeded(11)
     b.charge(40, 40); assert b.exceeded(0) is None
     b.charge(30, 30); assert "tokens" in b.exceeded(0)          # 140 > 100
-    b2 = Budget(max_provider_calls=1); b2.charge(); b2.charge()
+    # PROSPECTIVE provider-call bound (Codex #12): spending the last allowed call
+    # marks the budget exhausted immediately (>=), not one call past it.
+    b2 = Budget(max_provider_calls=1); b2.charge()
     assert "provider calls" in b2.exceeded(0)
 
 

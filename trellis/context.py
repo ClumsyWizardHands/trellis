@@ -60,6 +60,13 @@ def _est_tokens(text: str) -> int:
     return max(1, len(text) // 4)
 
 
+def _bounded_excerpt(text: str, max_chars: int = 400) -> str:
+    """A small, deterministic slice of the read's CONTENT — enough to reload what
+    the agent last understood, bounded so a mandatory (never-dropped) prior-read
+    item can't blow the packet. The full read stays one file-open away."""
+    return (text or "").strip()[:max_chars]
+
+
 ItemType = str   # "prior_read" | "decision" | "obligation" | "correction" | "verification"
 
 
@@ -135,9 +142,35 @@ class ContextCompiler:
         self.decisions = decisions or DecisionLog(ledger, self.ground)
         self.questions = questions or QuestionLog(ledger, self.ground)
 
+    def _may_load_read_content(self, entry: Entry, packet_key) -> bool:
+        """Privacy-at-selection for the read BODY (not just its pointer): may this
+        read's CONTENT be loaded into a packet keyed `packet_key`?
+
+        A read carrying no `surface` tag is the agent's OWN working read, reached
+        through the agent's own workspace handle — same-surface by construction, so
+        its content loads (this is not an 'unknown scope', it is the current read of
+        this very surface). A read that IS surface-tagged is compared by privacy
+        rank: content may sit in a packet at least as private as its source, never
+        less (the D7 direction). An unrankable tag, or a tag with no packet to
+        compare against, FAILS CLOSED — the body is withheld, the pointer remains.
+        (Scope-on-write for the agent's own reads is G7, owned elsewhere; until it
+        lands, an untagged own-read loads — see decisions_needed.)"""
+        surface = entry.body.get("surface")
+        if surface is None:
+            return True
+        if packet_key is None:
+            return False
+        from .surfaces import Surface, _PRIVACY_RANK
+        try:
+            rank = _PRIVACY_RANK[Surface(surface)]
+        except (ValueError, KeyError):
+            return False
+        return rank <= packet_key.privacy_rank()
+
     def compile(self, subjects: list[str], surface_key: str = "",
                 budget_tokens: int = 3000, read_prefix: str = "read",
-                surface_scope: Optional[str] = None) -> CompiledContext:
+                surface_scope: Optional[str] = None,
+                workspace=None, packet_key=None) -> CompiledContext:
         """Compile the context packet for a cycle about `subjects`. Mandatory
         items (obligations, corrections) are included first and never dropped;
         relevant decisions are relevance-scored and included until the budget is
@@ -173,7 +206,27 @@ class ContextCompiler:
                 man.excluded.append({"source_id": e.id, "type": "prior_read",
                                      "reason": "scoped to another surface (privacy)"})
                 continue
-            summary = f"[{title}] (open {path} to walk the full read)"
+            # Load a BOUNDED EXCERPT of the read CONTENT (Codex #8): a title-pointer
+            # is useless to a tool-less provider — it never actually sees the read.
+            # Privacy-at-selection: withhold the BODY (keep the pointer) when the
+            # read is more private than this packet, unknown-but-tagged, or has no
+            # packet to compare against (fail-closed).
+            excerpt = None
+            if workspace is not None:
+                if self._may_load_read_content(e, packet_key):
+                    try:
+                        excerpt = _bounded_excerpt(workspace.read(path))
+                    except Exception:
+                        excerpt = None   # unreadable → degrade to the pointer, never crash
+                else:
+                    man.excluded.append({"source_id": e.id, "type": "prior_read",
+                                         "reason": "content withheld: more-private or "
+                                                   "unknown scope (privacy, fail-closed)"})
+            if excerpt:
+                summary = (f"[{title}] — reloaded excerpt:\n{excerpt}\n"
+                           f"(open {path} for the full read)")
+            else:
+                summary = f"[{title}] (open {path} to walk the full read)"
             add(ContextItem("prior_read", e.id, summary,
                             "the read you last wrote — reloaded so you don't relearn cold",
                             _est_tokens(summary), mandatory=True))

@@ -71,12 +71,16 @@ def test_full_cycle_with_opinions(witness, ground, ledger):
     read = witness.workspace.read("read/current-read.md")
     assert "40d ago" in read and "2h ago" in read
 
-    # and the completion was verified by a NON-maker, in the ledger
+    # and the completion was checked by a NON-maker, in the ledger. The routine
+    # witness claim carries no artifact predicate (just an updated read + a
+    # recorded decision), so the honest verdict is PRECONDITIONS_PASSED, NOT
+    # VERIFIED — a maker's own loop label no longer launders existence into
+    # outcome-grade truth (D25; Codex#7 / FableG5b).
     verifications = [e for e in ledger.entries() if e.kind == "verification"]
     assert len(verifications) == 1
     assert verifications[0].body["maker"] == witness.id
     assert verifications[0].author != witness.id
-    assert verifications[0].body["status"] == "verified"
+    assert verifications[0].body["status"] == "preconditions_passed"
 
 
 def test_empty_opinions_is_nothing_new_not_manufactured_usefulness(witness, ground, ledger):

@@ -33,7 +33,8 @@ from datetime import datetime
 from typing import Optional
 
 from .clock import TimeGround
-from .decisions import Decision, DecisionLog, POV, Verdict
+from .decisions import (CollidingDecisionError, Decision, DecisionLog, POV,
+                       Verdict)
 from .emp import EMP
 from .ledger import Ledger
 from .loops import Budget, LoopRegistry, LoopRun, LoopSpec, Outcome
@@ -157,8 +158,28 @@ class Witness:
                         tags=("witness", "rejected"))
                     continue
                 d = self._to_decision(op)
-                entry = self.decisions.record(d)
-                recorded.append(entry.id)
+                try:
+                    entry = self.decisions.record(d)
+                    recorded.append(entry.id)
+                except CollidingDecisionError as e:
+                    # FAIL-CLOSED-BUT-ALIVE (FableG2): a live head already answers
+                    # this question. Changing a live answer must go through
+                    # reopen()/resolve() with lineage — which collision policy
+                    # (reopen vs escalate) is a human decision (see decisions_needed).
+                    # For now: record a typed, ledgered skip so the opinion is not
+                    # silently LOST and no second live head is silently FORKED, and
+                    # let the cycle finish alive instead of the bare
+                    # CollidingDecisionError escaping and crashing the driver
+                    # (loops.py deliberately never swallows).
+                    self.ledger.append(
+                        "opinion_skipped", self.id,
+                        {"subject": op.subject, "verdict": op.verdict,
+                         "emp_lineage": op.emp_lineage,
+                         "reason": "collides with an existing live head; reopen "
+                                   "required to change a live answer on the record",
+                         "detail": str(e)},
+                        tags=("witness", "skipped", "collision"))
+                    continue
 
             # remember — update the read beside us, then claim
             read_path = self._update_read(sensed, opinions)
@@ -182,9 +203,23 @@ class Witness:
                 self._pending_claim = claim
         outcome = Outcome(self.loops.recent_outcomes(spec.name, 1)[0])
         if outcome == Outcome.OK and getattr(self, "_pending_claim", None) is not None:
-            verdict = self.verifier.verify(self._pending_claim)
-            record_verdict(self.ledger, self._pending_claim, verdict)
+            claim = self._pending_claim
             self._pending_claim = None
+            try:
+                verdict = self.verifier.verify(claim)
+                record_verdict(self.ledger, claim, verdict)
+            except Exception as e:
+                # Codex#10: the cycle is already durably recorded loop_run_end:ok,
+                # but verification did NOT conclude (e.g. the verifier endpoint is
+                # down). No silent failure: give the verification its own typed
+                # outcome and record the failure to the ledger BEFORE propagating,
+                # so an unverified OK is never left looking silently verified.
+                self.ledger.append(
+                    "verification_error", getattr(self.verifier, "id", "verifier"),
+                    {"claim_id": claim.id, "maker": claim.maker, "task": claim.task,
+                     "status": "error", "error": repr(e)},
+                    tags=("verify", "error", claim.maker))
+                raise
         return outcome
 
     # ----- pieces -------------------------------------------------------------
@@ -205,10 +240,17 @@ class Witness:
             recent_burns=burns,
         )
         compiled_block = ""
-        if subjects and getattr(self, "compiler", None) is not None:
-            compiled = self.compiler.compile(subjects=subjects,
+        if getattr(self, "compiler", None) is not None:
+            # Compile + manifest on EVERY cycle, including zero-event ones (Codex #8):
+            # a quiet cycle still reloads the prior read and open obligations, and a
+            # manifest of what was (and was not) seen is on the record. The prior
+            # read's CONTENT — not just a title-pointer the tool-less provider can't
+            # open — is loaded from this agent's own workspace, privacy fail-closed.
+            compiled = self.compiler.compile(subjects=subjects or [],
                                              surface_key=self.key.storage_key(),
-                                             budget_tokens=600)
+                                             budget_tokens=600,
+                                             workspace=self.workspace,
+                                             packet_key=self.key)
             # record the manifest — what the model saw and did NOT see, auditable
             self.ledger.append("context_manifest", self.id, compiled.manifest.to_dict(),
                                tags=("context", "manifest"))
@@ -260,12 +302,60 @@ class Witness:
             if not isinstance(item, dict):
                 raise ValueError(f"opinion {i} is not an object")
             try:
-                opinions.append(Opinion(**{k: v for k, v in item.items()
-                                           if k in Opinion.__dataclass_fields__}))
+                op = Opinion(**{k: v for k, v in item.items()
+                                if k in Opinion.__dataclass_fields__})
             except TypeError as e:
                 # missing required fields must be retryable, not a crash
                 # (found by the stress suite: garbage-model scenario)
                 raise ValueError(f"opinion {i} malformed: {e}") from e
+            # Validate NESTED shapes HERE (Codex #11): a plausible-but-malformed
+            # payload (e.g. povs:["not-an-object"], a bad verdict, a non-int
+            # revisit_days) used to pass parsing and then crash _to_decision with a
+            # TypeError — wasting the retry on a late, unrecoverable failure. A bad
+            # shape is a ValueError now, so it triggers the RETRY like any other
+            # malformed output.
+            #
+            # Codex#11 residual: the FIELD TYPES _to_decision/Decision require were
+            # left unchecked — a numeric `subject` or an object `rationale` sailed
+            # past parsing and then crashed LATE in Decision.__post_init__ (`.strip()`
+            # on a non-string), escaping the cycle as an unhandled crash instead of
+            # the retry. Every field Decision consumes is type-checked HERE now, so a
+            # wrong type is a retryable ValueError, never a late crash. The required
+            # strings (subject/rationale/emp_lineage) are checked as-is — the
+            # emptiness/lineage rules stay Decision's to enforce; here we only ensure
+            # the TYPE is right so those checks can run without a TypeError.
+            if op.verdict not in ("Y", "N", "T"):
+                raise ValueError(f"opinion {i}: verdict must be Y, N, or T "
+                                 f"(got {op.verdict!r})")
+            if not isinstance(op.subject, str):
+                raise ValueError(f"opinion {i}: subject must be a string "
+                                 f"(got {type(op.subject).__name__})")
+            if not isinstance(op.rationale, str):
+                raise ValueError(f"opinion {i}: rationale must be a string "
+                                 f"(got {type(op.rationale).__name__})")
+            if not isinstance(op.emp_lineage, str):
+                raise ValueError(f"opinion {i}: emp_lineage must be a string "
+                                 f"(got {type(op.emp_lineage).__name__})")
+            if op.owner is not None and not isinstance(op.owner, str):
+                raise ValueError(f"opinion {i}: owner must be a string or omitted "
+                                 f"(got {type(op.owner).__name__})")
+            if op.missing is not None and not isinstance(op.missing, str):
+                raise ValueError(f"opinion {i}: missing must be a string or omitted "
+                                 f"(got {type(op.missing).__name__})")
+            if not isinstance(op.povs, list):
+                raise ValueError(f"opinion {i}: povs must be a list of objects")
+            for j, p in enumerate(op.povs):
+                if not isinstance(p, dict):
+                    raise ValueError(f"opinion {i} pov {j} is not an object")
+                if not isinstance(p.get("holder"), str) or not isinstance(p.get("position"), str):
+                    raise ValueError(f"opinion {i} pov {j} needs string holder and position")
+                # basis is optional but, if present, must be a string — _to_decision
+                # passes it straight into POV.basis, which lands unvalidated in the body.
+                if "basis" in p and not isinstance(p["basis"], str):
+                    raise ValueError(f"opinion {i} pov {j}: basis must be a string")
+            if op.revisit_days is not None and not isinstance(op.revisit_days, int):
+                raise ValueError(f"opinion {i}: revisit_days must be an integer")
+            opinions.append(op)
         return opinions
 
     def _to_decision(self, op: Opinion) -> Decision:
@@ -278,7 +368,11 @@ class Witness:
             rationale=op.rationale,
             author=self.id,
             emp_lineage=op.emp_lineage,
-            povs=[POV(**p) for p in op.povs],
+            # build POVs from KNOWN keys only — an extra/unexpected key in a pov
+            # object must not TypeError here (the shape was already validated for
+            # holder/position in _parse_opinions; Codex #11).
+            povs=[POV(holder=p["holder"], position=p["position"], basis=p.get("basis", ""))
+                  for p in op.povs],
             owner=op.owner,
             revisit_at=revisit,
             missing=op.missing,
