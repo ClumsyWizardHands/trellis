@@ -220,3 +220,64 @@ def test_harvested_friction_reaches_the_prompt_within_budget(ledger, ground):
     prompt = assemble_prompt(emp, ground, key, recent_burns=burns)
     assert "Recent burns" in prompt and "protocol_violation" in prompt
     assert estimate_tokens(prompt) <= PROMPT_TOKEN_BUDGET
+
+
+# ----- Phase 3: the improvement-curiosity loop, with teeth ----------------
+
+from trellis.selfimprove import ImprovementLoop
+
+
+def _recurring_burns(ledger, kind="protocol_violation", n=2):
+    for i in range(n):
+        ledger.append("loop_run_end", "witness", {"run_id": f"r{i}", "outcome": kind})
+
+
+def test_recurring_stumble_raises_a_staleness_railed_question(ledger, ground):
+    _recurring_burns(ledger)
+    loop = ImprovementLoop(ledger, "witness", ground)
+    raised = loop.run(min_count=2)
+    assert len(loop.open_improvements()) == 1
+    assert "protocol_violation" in loop.open_improvements()[0].body["assumption"]
+
+
+def test_the_same_stumble_folds_not_forks(ledger, ground, clock):
+    _recurring_burns(ledger)
+    loop = ImprovementLoop(ledger, "witness", ground)
+    loop.run(min_count=2)
+    clock.advance(hours=1)
+    _recurring_burns(ledger, n=1)          # it stumbles again
+    loop.run(min_count=2)
+    assert len(loop.open_improvements()) == 1   # one nagging node, not a new tally
+
+
+def test_an_unaddressed_improvement_goes_stale(ledger, ground, clock):
+    _recurring_burns(ledger)
+    loop = ImprovementLoop(ledger, "witness", ground)
+    loop.run(min_count=2, revisit_days=2)
+    assert loop.stale_improvements() == []
+    clock.advance(days=3)
+    assert len(loop.stale_improvements()) == 1  # kept stumbling, never ratified a fix
+
+
+def test_closes_only_on_a_ratified_proposal(ledger, ground, clock):
+    from trellis.selfimprove import ImprovementEngine, ImprovementProposal, ProposalTarget
+    from trellis.curiosity import NotResolvedError
+    from trellis.verify import RuleVerifier
+    _recurring_burns(ledger)
+    loop = ImprovementLoop(ledger, "witness", ground)
+    loop.run(min_count=2)
+    clock.advance(hours=1)
+    # a proposal to fix it, verified but NOT yet ratified
+    ev = [ledger.append("decision", "witness", {"decision_id": "d", "subject": "x"}).id]
+    eng = ImprovementEngine(ledger, "witness",
+                            verifier=RuleVerifier("verifier:check", ledger=ledger, ground=ground), ground=ground)
+    p = eng.propose(ImprovementProposal(ProposalTarget.PROCESS,
+                    "always write a typed outcome even on failure",
+                    "protocol_violation recurred", evidence_ids=ev))
+    with pytest.raises(NotResolvedError):
+        loop.address("protocol_violation", p)        # verified but unratified → still open
+    assert len(loop.open_improvements()) == 1
+    # a human ratifies → NOW it closes (the map moved on how the agent works)
+    r = eng.ratify(p.id, human="alex")
+    loop.address("protocol_violation", r)
+    assert loop.open_improvements() == []

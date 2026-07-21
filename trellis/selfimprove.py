@@ -465,3 +465,82 @@ class ConfusionHarvest:
             k = e.body.get("stumble", "?")
             counts[k] = counts.get(k, 0) + 1
         return [{"stumble": k, "count": c} for k, c in counts.items() if c >= min_count]
+
+
+# ----- the improvement-curiosity loop, with teeth (Phase 3) ------------------
+
+#: An improvement question targets the agent's assumption that its CURRENT handling
+#: of a recurring stumble is fine. It rides the same "unresolved-T-is-a-hidden-no"
+#: staleness rail as any curiosity — and, crucially, it can ONLY be closed by a
+#: RATIFIED proposal, so a "dry" improvement pass (the harvest ran, nothing was
+#: fixed) is not progress. "I noticed I keep failing" is not "I improved."
+_IMPROVEMENT_ASSUMPTION = "self-improvement: my current handling of {kind!r} stumbles is already adequate"
+_IMPROVEMENT_PREFIX = "self-improvement:"
+
+
+class ImprovementLoop:
+    """Turns the agent's recurring OWN stumbles into staleness-railed improvement
+    questions that nag until a fix is ratified — the curiosity discipline (D22)
+    applied to the agent's own operation. Composition over the harvest + the
+    question rail + the D23 proposal gate; no new authority."""
+
+    def __init__(self, ledger: Ledger, agent_id: str = "witness",
+                 ground: Optional[TimeGround] = None):
+        from .curiosity import QuestionLog
+        self.ledger = ledger
+        self.agent_id = agent_id
+        self.ground = ground or ledger.ground
+        self.harvest = ConfusionHarvest(ledger, agent_id, self.ground)
+        self.questions = QuestionLog(ledger, self.ground)
+
+    def run(self, min_count: int = 2, revisit_days: int = 3,
+            author: Optional[str] = None) -> list:
+        """Harvest today's stumbles; for each RECURRING kind, raise (or re-ask, if
+        already open) a staleness-railed improvement question. Anti-forked on the
+        assumption, so the same recurring stumble is ONE nagging node, not a tally."""
+        from datetime import timedelta
+        from .curiosity import Question
+        author = author or self.agent_id
+        self.harvest.harvest(author=author)
+        raised = []
+        for rec in self.harvest.recurring_burns(min_count=min_count):
+            kind = rec["stumble"]
+            q = Question(
+                title=f"Should I change how I handle '{kind}'? (it recurred {rec['count']}×)",
+                assumption=_IMPROVEMENT_ASSUMPTION.format(kind=kind),
+                what_would_resolve="a ratified improvement proposal that addresses this stumble",
+                owner=author, revisit_at=self.ground.now() + timedelta(days=revisit_days))
+            raised.append(self.questions.ask(q, author))
+        return raised
+
+    def open_improvements(self) -> list:
+        return [e for e in self.questions.open_questions()
+                if str(e.body.get("assumption", "")).startswith(_IMPROVEMENT_PREFIX)]
+
+    def stale_improvements(self) -> list:
+        """Overdue improvement questions — 'you keep stumbling the same way and
+        still haven't ratified a fix.' The agent can't emit these and forget them."""
+        return [e for e in self.questions.stale()
+                if str(e.body.get("assumption", "")).startswith(_IMPROVEMENT_PREFIX)]
+
+    def address(self, kind: str, ratified_proposal: Entry,
+                author: Optional[str] = None) -> Entry:
+        """Close an improvement question — permitted ONLY when a proposal that
+        addresses it was RATIFIED (disposition Y by a human). A dry pass, or a
+        merely-verified-but-unratified proposal, does NOT close it: the map has to
+        have actually moved on how the agent works. Reuses curiosity.resolve's
+        pursued-map-move gate, so the close is honest by construction."""
+        from .curiosity import assumption_key
+        author = author or self.agent_id
+        if ratified_proposal.kind != PROPOSAL_KIND or ratified_proposal.body.get("disposition") != "Y":
+            from .curiosity import NotResolvedError
+            raise NotResolvedError(
+                "an improvement question closes only on a RATIFIED proposal (disposition "
+                "Y) — noticing the stumble, or even verifying a fix, is not improving until "
+                "a human ratifies the change")
+        akey = assumption_key(_IMPROVEMENT_ASSUMPTION.format(kind=kind))
+        # record the pursued map-move (the ratification), then resolve the question
+        self.questions.record_seek(akey, f"ratified a fix for the recurring '{kind}' stumble",
+                                   map_changed=True, delta_refs=[ratified_proposal.id], author=author)
+        return self.questions.resolve(akey, f"ratified a proposal addressing '{kind}'",
+                                      [ratified_proposal.id], author)
