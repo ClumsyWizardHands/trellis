@@ -105,6 +105,27 @@ Three things make that trustworthy instead of just another summarizer:
 All of it lands in an Obsidian vault on your machine — your notebook, human-
 readable and editable — kept honest with the underlying record.
 
+## It gets better at its own job — and still can't change itself without your yes
+
+Here's the part that makes "more useful over time" literal rather than hopeful. Each
+day trellis looks at *its own* record for where it stumbled — a job it botched, a
+claim of "done" that a checker knocked down, a question it keeps searching but never
+actually resolves, a place where you had to correct it — and it writes those down as
+lessons it carries into tomorrow ("where did I get confused today?"). When it spots a
+way it could work better — a new skill worth having, a rule worth adopting — it
+**proposes** the change, shows you the evidence, has a *separate* checker confirm that
+evidence is real, and then waits for you to say yes. It thinks about improving itself
+constantly; it can **never** rewrite itself on its own. (And if it finds a tempting
+"skill" from some random video, that starts as a *no* it has to argue its way out of —
+because trusting AI to install its own tools is exactly how the bad ones get in.)
+
+It even **draws its own growth**: every day it renders a little picture of its current
+state, built on yesterday's, so you can watch it go from pale-and-unproven to
+warm-and-trusted — and every line of that picture is a real number from the record, not
+a mood. The record it keeps also stopped *slowing down* as it fills up (an early version
+got sluggish the more it remembered — the opposite of the point; that's fixed). So the
+longer it runs, the more it knows, the better it works, and the more you can see why.
+
 ## The plain terms people search for
 
 If someone asked "what category is this," these are the honest, commonplace labels:
@@ -119,6 +140,8 @@ If someone asked "what category is this," these are the honest, commonplace labe
 - an **honest** agent (no pretend body, no pretend feelings, no faking "done")
 - a **judgment** agent, not a **task** agent (it forms and records opinions —
   including "no" and "let's get more input" — rather than just executing)
+- a **self-improving** agent that is safe about it (it proposes its own changes,
+  has them independently checked, and never applies one without your yes)
 
 ## The one-line contrast
 

@@ -18,30 +18,36 @@ flowchart LR
 
     subgraph trellis["trellis"]
         direction TB
-        INGEST["ingest.py<br/>stamp + attribute"]
-        LEDGER[("ledger.jsonl<br/>append-only · bitemporal")]
+        INGEST["ingest / sources<br/>idempotent · resumable"]
+        OBSERVE["observe<br/>room's decision + agent's opinion"]
+        LEDGER[("ledger.jsonl<br/>append-only · bitemporal · cached")]
+        COMPILE["context compiler<br/>reload the read + obligations"]
         WITNESS["the Witness<br/>sense → resolve → act → verify → remember"]
-        PANEL["verifier panel<br/>cheap independent lenses"]
-        OUTBOX["outbox<br/>stage, never fire"]
-        UI["web UI<br/>legible + the self-image glyph"]
+        PANEL["verifier panel<br/>outcome-checked, not existence"]
+        IMPROVE["self-improvement<br/>propose · never self-apply"]
+        OUTBOX["durable outbox<br/>stage · idempotent · never auto-fire"]
+        UI["web portal<br/>legible + the self-image morph"]
     end
 
     DISCORD --> INGEST
     CAL --> INGEST
-    INGEST --> LEDGER
+    INGEST --> OBSERVE --> LEDGER
+    LEDGER --> COMPILE --> WITNESS
     WITNESS <--> LEDGER
     WITNESS -- "claims" --> PANEL
     PANEL -- "verdicts" --> LEDGER
+    LEDGER -- "burns / stumbles" --> IMPROVE
+    IMPROVE -- "verified proposals" --> HUMAN
     WITNESS -- "proposes" --> OUTBOX
     LEDGER --> UI
-    UI -- "approve / deny" --> HUMAN
+    UI -- "approve / deny / affirm" --> HUMAN
     HUMAN -- "the last step before the world" --> OUTBOX
     OUTBOX -- "only on a yes" --> ACTION["post / send / apply"]
 
     classDef store fill:#161b22,stroke:#58a6ff,color:#e6edf3
     classDef act fill:#0d2818,stroke:#3fb950,color:#e6edf3
     class LEDGER store
-    class WITNESS,PANEL act
+    class WITNESS,PANEL,COMPILE act
 ```
 
 The agent is disposable. **The ledger is the thing that lasts** — every other box
@@ -552,6 +558,89 @@ place to *operate* the agent instead of *understand* it. The portal above is the
 built replacement. The correction and its reasoning:
 [the cognitive lineage](lineage/2026-07-15-ui-comprehension-reflection.md).
 </details>
+
+---
+
+## 15. The context compiler — reload the read before an opinion (D24)
+
+The Witness used to form opinions on the latest batch alone, having written a
+"current read" it never read back. The compiler fixes that: before RESOLVE, it
+reconstructs the longitudinal state deterministically and records a manifest of
+exactly what the model saw — and what it excluded, and why.
+
+```mermaid
+flowchart TB
+    SUBJ["the cycle's subjects<br/>(from the new events)"] --> C{{"context compiler"}}
+    LED[("ledger + vault")] --> C
+    C --> R["prior READ (reloaded)"]
+    C --> O["open OBLIGATIONS<br/>hidden-no Ts · reopened · stale curiosities<br/>(full objects, not a count)"]
+    C --> K["relevant DECISIONS<br/>(by subject)"]
+    C --> X["CORRECTIONS<br/>(newer supersedes older)"]
+    C --> V["VERIFICATIONS<br/>(ground the confidence)"]
+    R & O & K & X & V --> PKT["compiled packet → the user message"]
+    C --> MAN["ContextManifest<br/>included + EXCLUDED (privacy / budget / irrelevant),<br/>each with a reason — recorded on the ledger"]
+    PKT --> WIT["the Witness forms its Y/N/T<br/>over reconstructed state, not the batch alone"]
+    classDef act fill:#0d2818,stroke:#3fb950,color:#e6edf3
+    class C,WIT act
+```
+
+## 16. The self-improvement engine — propose your own repair, never apply it (D23)
+
+trellis gets better at its *own job* over time — but the two gates every other
+"self-improving agent" skips are structural here: an independent verifier, and a
+human's yes. The agent proposes; it never applies alone.
+
+```mermaid
+flowchart LR
+    subgraph watch["the agent watches its OWN record"]
+        BURN["stumbles → friction<br/>protocol_violation · self-refuted ·<br/>dry-streak · human correction"]
+        SKILL["skill estate<br/>'is there already a skill?' (dedup)"]
+    end
+    BURN --> PROP["ImprovementProposal<br/>emp:friction · process · skill:add · …"]
+    SKILL --> PROP
+    PROP --> VER{{"independent verifier<br/>maker ≠ verifier"}}
+    VER -- "verified" --> STAGE["staged for a human"]
+    VER -- "no openable evidence" --> UNV["unverified — cannot take effect"]
+    STAGE --> RAT{{"human ratifies?"}}
+    RAT -- "yes" --> EFFECT["may take effect<br/>(a human installs / edits)"]
+    RAT -- "external skill (a video)" --> N["default-N — argue the supply-chain risk"]
+    classDef act fill:#0d2818,stroke:#3fb950,color:#e6edf3
+    class VER,RAT act
+```
+
+*`can_take_effect()` re-derives BOTH gates from the append-only record, never from
+a proposal's own flag. The agent thinks about improving itself always; it changes
+itself never without an independent verdict AND your yes.*
+
+## 17. The durable outbox — refusal #5 survives a crash (D26)
+
+"Nothing fires without your yes" is hollow if a restart forgets the yes or a retry
+sends twice. The outbox is event-sourced on the ledger: full payload persisted,
+reconstructs on restart, and `fire()` records a **firing intent before the world**,
+so a crash can't double-send.
+
+```mermaid
+stateDiagram-v2
+    [*] --> staged: agent stages (full payload on the ledger)
+    staged --> approved: a human (≠ maker) approves
+    staged --> denied: a human denies
+    approved --> firing: fire() records the INTENT first
+    firing --> fired: executor returned
+    firing --> unknown: executor raised (remote may have it)
+    unknown --> fired: human reconciles "it went out"
+    unknown --> approved: human reconciles "it did not" (one clean retry)
+    fired --> [*]
+    note right of firing
+        a retry while firing/fired → DoubleFireError
+        (no blind re-send of a side effect
+        that may have reached the world)
+    end note
+```
+
+*Reconstructable from the ledger alone — a fresh process, the web UI, and the
+executor share one store (the split-brain is closed). End-to-end exactly-once still
+depends on the destination honouring the idempotency key; trellis guarantees
+fire-at-most-once and surfaces `unknown` for a human — and says so.*
 
 ---
 

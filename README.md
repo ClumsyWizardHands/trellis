@@ -13,7 +13,8 @@ useful the longer they work with you. → **New here? Read [WHAT-THIS-IS.md](WHA
 
 <p align="center">
   <a href="https://github.com/ClumsyWizardHands/trellis/actions/workflows/ci.yml"><img src="https://github.com/ClumsyWizardHands/trellis/actions/workflows/ci.yml/badge.svg" alt="CI"/></a>
-  <img src="https://img.shields.io/badge/adversarial-7%20rounds%2C%20converged-58a6ff?style=flat-square" alt="adversarial"/>
+  <img src="https://img.shields.io/badge/adversarial-independently%20verified-58a6ff?style=flat-square" alt="adversarial"/>
+  <img src="https://img.shields.io/badge/decisions-27%20triangulated-8957e5?style=flat-square" alt="decisions"/>
   <img src="https://img.shields.io/badge/core-zero%20runtime%20deps-d29922?style=flat-square" alt="deps"/>
   <img src="https://img.shields.io/badge/python-3.10%2B-e6edf3?style=flat-square" alt="python"/>
   <img src="https://img.shields.io/badge/license-MIT-8b949e?style=flat-square" alt="license"/>
@@ -33,39 +34,55 @@ picture. Same record → same creature. It changes only because the record chang
 </p>
 <p align="center"><sub><b>newborn</b> (unproven, pale) · <b>learning</b> · <b>trusted</b> (warm, calm, crowned with verification) · <b>wary</b> (muted — pass-rate dropped; many eyes — 4 unresolved triangulations)</sub></p>
 
+And each day it draws itself **again**, building on yesterday — a deterministic
+morph over the bitemporal chain of self-image snapshots. It grows out of the
+previous day (the ghost behind it); it changes only because the record changed.
+Not "what I feel like today" (that would be the soul leaking back in through the
+picture) — the record paints it.
+
+<p align="center">
+  <img src="docs/assets/self-portrait.svg" width="760" alt="the daily self-portrait — today drawn over yesterday's ghost, and the growth strip from pale/unproven to warm/trusted"/>
+</p>
+
 ### The whole thing at a glance
 
 ```mermaid
 flowchart LR
     subgraph world["the world"]
-        DISCORD["Discord / transcripts"]
+        DISCORD["Discord / transcripts<br/>videos · audio notes"]
         CAL["calendar"]
         HUMAN(["a human"])
     end
     subgraph trellis["trellis"]
         direction TB
-        INGEST["ingest<br/>stamp + attribute"]
-        LEDGER[("ledger.jsonl<br/>append-only · bitemporal")]
+        INGEST["ingest<br/>idempotent · resumable"]
+        OBSERVE["observe<br/>room's decision + agent's opinion"]
+        LEDGER[("ledger.jsonl<br/>append-only · bitemporal · cached")]
+        COMPILE["context compiler<br/>reload the read + obligations"]
         WITNESS["the Witness<br/>sense→resolve→act→verify→remember"]
-        PANEL["verifier panel<br/>cheap independent lenses"]
-        OUTBOX["outbox<br/>stage, never fire"]
-        UI["web UI<br/>legible + self-image glyph"]
+        PANEL["verifier panel<br/>outcome-checked, not existence"]
+        IMPROVE["self-improvement<br/>propose · never self-apply"]
+        OUTBOX["durable outbox<br/>stage · idempotent · never auto-fire"]
+        UI["web portal<br/>legible · self-image morph"]
     end
     DISCORD --> INGEST
     CAL --> INGEST
-    INGEST --> LEDGER
+    INGEST --> OBSERVE --> LEDGER
+    LEDGER --> COMPILE --> WITNESS
     WITNESS <--> LEDGER
     WITNESS -- claims --> PANEL
     PANEL -- verdicts --> LEDGER
+    LEDGER -- burns / stumbles --> IMPROVE
+    IMPROVE -- verified proposals --> HUMAN
     WITNESS -- proposes --> OUTBOX
     LEDGER --> UI
-    UI -- approve / deny --> HUMAN
+    UI -- approve / deny / affirm --> HUMAN
     HUMAN -- the last step before the world --> OUTBOX
     OUTBOX -- only on a yes --> ACTION["post / send / apply"]
     classDef store fill:#161b22,stroke:#58a6ff,color:#e6edf3
     classDef act fill:#0d2818,stroke:#3fb950,color:#e6edf3
     class LEDGER store
-    class WITNESS,PANEL act
+    class WITNESS,PANEL,COMPILE act
 ```
 
 ### The working loop — the unit of work is a *recorded, checked judgment*
@@ -137,6 +154,31 @@ separate opinion, and the source moments it rests on. Its worry made watchable: 
 <b>dry streak</b> flags "keeps looking, nothing moves" — because "I searched" is
 structurally never "I understand." Design → [`docs/PLAN-contemplative-ingestion.md`](docs/PLAN-contemplative-ingestion.md).</sub>
 
+### It reloads what it knew before it forms an opinion
+
+The hardest failure in an agent that's supposed to *understand over time*: forming
+each opinion on the latest batch alone, having written a "current read" it never
+reads back. trellis's **context compiler** (`context.py`, D24) fixes that — before
+the Witness resolves anything, a deterministic pass **reloads the prior read**, the
+active decisions on the subject, the **open obligations as full objects** (not a
+count), recent corrections, and verification outcomes — and records a
+**ContextManifest**: exactly what the model saw, and what was excluded and why. The
+opinion is formed over reconstructed state, and the compilation itself is auditable.
+
+### It recursively improves itself — and never changes itself alone
+
+trellis is built to get *better at its own job* over time (D23). It watches its own
+record for stumbles — a silent-failure, a self-refuted claim, a question it keeps
+searching and never resolves, a human correcting its read — and turns each into a
+**dread-linted friction note** the next prompt reads ("where did I get confused
+today?"). It keeps a navigable **skill estate** so "is there already a skill for
+this?" dedups before it proposes a new one. And any change it wants to make to
+itself — an EMP edit, a new skill, a process tweak — is a **staged, independently
+verified proposal that a human ratifies**. A skill from an untrusted source (a
+YouTube short) is a *default-no* that must state its supply-chain reasoning. The
+agent thinks about improving itself constantly; it can't change itself without an
+independent verified verdict **and** your yes. That's "self-improving" made honest.
+
 <details>
 <summary><b>v1 — the operations console we corrected (and why it was wrong)</b></summary>
 
@@ -188,48 +230,79 @@ raises, it doesn't remind:
 | # | Refusal | Where | The burn it answers |
 |---|---------|-------|---------------------|
 | 1 | **No silent failure.** Every loop run ends in a typed outcome, written in a `finally`. A run that says nothing is recorded as `protocol_violation` — by the harness, about the run. | `loops.py` | "Claude failed silently and has been spinning for four hours." — Clare, 2026-06-11 |
-| 2 | **No self-certification.** A completion claim carries evidence a checker can open; the verifier must be a different identity, ideally a cheaper model with fresh context. Maker == verifier raises. | `verify.py` | "A self audit is not an audit." — Brett, 2026-03-13 |
+| 2 | **No self-certification.** A completion claim carries evidence a checker can open; the verifier must be a different identity. Maker == verifier raises. And a pass means the **outcome** was checked — evidence *existence* is `PRECONDITIONS_PASSED`, never `VERIFIED`. | `verify.py` | "A self audit is not an audit." — Brett, 2026-03-13 |
 | 3 | **No soul.md.** Identity is an EMP grounded in observable behavior. The loader refuses soul/persona/character files by name; an embodiment linter catches "I can see / I feel / my eyes." | `emp.py` | "The original sin: the agent gaslighting itself and us that it is something it is not." — the June 2026 paradigm doc |
 | 4 | **No naked `now()`.** All state is bitemporal (event-time + write-time). Retrieved items are age-annotated so stale data *looks* stale. Naive timestamps are refused. Newer supersedes older, out loud. | `clock.py`, `ledger.py` | "A conversation from April minted today reads June 10." — loop-provenance audit, 2026-06-10 |
-| 5 | **No auto-fire.** Every outbound action stages for a named human. The staging agent cannot approve itself. There is no bypass flag. | `stage.py` | "Nothing is ever sent, posted, or applied automatically." — DAILY-EMPIRE-PROTOCOL, 2026-07-15 |
+| 5 | **No auto-fire.** Every outbound action stages for a named human; the staging agent cannot approve itself; no bypass flag. The outbox is **durable** — it survives a restart and fires **idempotently**, so a crash can't lose your yes or send the same thing twice. | `stage.py` | "Nothing is ever sent, posted, or applied automatically." — DAILY-EMPIRE-PROTOCOL, 2026-07-15 |
 
 ## What lives here
 
+**The spine — the record and its refusals:**
+
 ```
 trellis/
-├── clock.py       time: bitemporal stamps, staleness decay, heartbeat-vs-cron,
-│                  schedules you can VERIFY ran ("were the cron jobs actually
-│                  scheduled?" is a query now)
+├── clock.py       time: bitemporal stamps, half-life staleness (future-dated
+│                  data is QUARANTINED, not "fresh"), heartbeat-vs-cron,
+│                  schedules you can VERIFY ran
 ├── ledger.py      the spine: append-only JSONL, event-time + write-time, author
-│                  required, supersession-not-deletion, drift-proof search,
-│                  as_of() time travel
-├── emp.py         identity: EMP loader (Ends/Means/Principles/Identity/Friction/
-│                  Signals/Observable), soul refusal, embodiment linter
-├── decisions.py   the atomic record: Y/N/T decisions with EMP lineage.
-│                  T requires ≥3 named POVs + owner + revisit time.
-│                  Unresolved Ts surface as HIDDEN NOS.
-├── surfaces.py    threads as substrate: (agent, surface, thread, human) keys;
-│                  DM→channel flow raises without a human-logged declassification
-├── passes.py      agent-to-agent: typed Pass files with a required ask
-│                  (the turd-drop is a type error), tracked lifecycle,
-│                  comments-as-protocol, overdue detection
-├── loops.py       working loops: bounded (max_turns is never None), typed
-│                  outcomes, block-loop breaker → triage, quiet loops → dormant
-├── verify.py      the checker's seat: RuleVerifier (deterministic floor) +
-│                  ModelVerifier (the haiku-verifier pattern, refute-oriented);
-│                  verdicts compound into a trust record per maker
-├── stage.py       the outbox: stage → human approves → fire. Nothing else.
-├── memory.py      memory beside the agent: synthesis-test write gate,
-│                  flush-before-compact, session epitaphs ("the agent dies;
-│                  the record survives")
-├── prompt.py      the standing prompt: <1,200 tokens, clock injected, maps not
-│                  content, staleness legend, status rail
-├── agent.py       the Witness: sense → resolve → act → verify → remember.
-│                  Emits opinions as Y/N/T. [] is a legitimate answer.
-└── providers/     model seats: mock (deterministic), claude_sdk (first-class,
-                   optional), openai_compat (local models — Gemma/Hermes/
-                   Nemotron via Ollama/LM Studio/vLLM, stdlib-only)
+│                  required, supersession-not-deletion, as_of() time travel, and
+│                  a rebuildable read-cache so the record compounds without slowing
+├── identity.py    one definition of "the same actor" / "blank"; the ASCII-identity
+│                  allowlist that closes homoglyph self-approval at every gate
+├── emp.py         identity: EMP (Ends/Means/Principles/…), soul refusal, the
+│                  embodiment + dread lints, the functional mortality posture
+├── decisions.py   the atomic Y/N/T record with EMP lineage; anti-fork on the
+│                  question-key (two live answers to one question is impossible);
+│                  T needs ≥3 POVs + owner + revisit; unresolved Ts → HIDDEN NOS
+├── navigate.py    memory is navigation: WALK (read-only) / REOPEN / DECIDE, the
+│                  resolved-head cache, title search — you never silently re-decide
+├── surfaces.py    threads as substrate; privacy lives in the (agent,surface,
+│                  thread,human) key — a DM can't leak into a channel
+├── passes.py      agent-to-agent typed Pass files with a required ask (the
+│                  turd-drop is a type error), tracked lifecycle, overdue detection
+├── loops.py       bounded loops; a typed outcome in a `finally`; if the store is
+│                  down it fails LOUD (never reports success on an unrecorded run)
+├── verify.py      the checker's seat: existence is PRECONDITIONS_PASSED, an outcome
+│                  predicate earns VERIFIED; RuleVerifier + ModelVerifier; trust
+│                  compounds per maker; maker == verifier raises
+├── panel.py       the haiku-verifier panel: N independent lenses, refute-by-default
+│                  quorum — diversity, not a chorus
+├── stage.py       the DURABLE outbox: event-sourced, reconstructs on restart,
+│                  idempotent fire (no double-send on a crash), UNKNOWN + reconcile
+├── memory.py      memory beside the agent: synthesis-test write gate, fold-not-
+│                  clobber, flush-before-compact, session epitaphs
+├── prompt.py      the standing prompt (<1,200 tokens): clock, maps not content,
+│                  staleness legend, and the day's harvested burns
 ```
+
+**The contemplative backdrop — a mind that maps what it understands:**
+
+```
+├── sources.py     the ingestion spine: idempotent by identity + content-hash,
+│                  resumable across a crash (two-phase started/complete markers)
+├── ingest.py      Discord/calendar → ledger, bitemporally; position_history —
+│                  recall-with-receipts a human structurally can't match
+├── observe.py     a found decision is TWO linked nodes: the room's (attributed,
+│                  confidence-tagged) and the agent's own opinion; provenance FLOORs
+├── vault.py       the Obsidian vault as the ledger's reconciled face — a human's
+│                  edit is detected and folded in as an attributed write
+├── curiosity.py   open questions with teeth: a dry seek is not understanding;
+│                  closing needs a pursued map-move, not "I searched"
+├── reflect.py     the daily reflection ritual: a grounded self-image + any
+│                  self-change staged as an independently-VERIFIED proposal
+├── context.py     the context compiler: reload the prior read + open obligations +
+│                  corrections before forming an opinion, with an auditable manifest
+├── selfimprove.py the self-improvement engine: a skill estate + typed proposals —
+│                  the agent proposes its own repair, and never applies it alone
+├── agent.py       the Witness: sense → resolve → act → verify → remember, now
+│                  over COMPILED context. Emits Y/N/T; [] is a legitimate answer
+└── providers/     model seats: mock (deterministic), claude_sdk (first-class,
+                   optional), openai_compat (local — Gemma/Hermes via Ollama, stdlib)
+```
+
+**The comprehension portal** (`web/`, an optional extra): `app.py` + `views.py`
+(FastAPI + HTMX + SSE over the JSONL ledger), `glyph.py` + `selfportrait.py` (the
+honest self-image and its daily, deterministic morph).
 
 Companion documents:
 
@@ -302,6 +375,18 @@ with LoopRun(spec, registry, actor="witness:a") as run:
 # work that cannot grade itself
 RuleVerifier("witness:a").verify(claim_by_witness_a)
 # → SelfCertificationError: a self-audit is not an audit
+
+# a "pass" that means the OUTCOME held, not that a file exists
+verifier.verify(claim_backed_only_by="opaque://uncheckable")
+# → INSUFFICIENT (existence alone is PRECONDITIONS_PASSED, never VERIFIED)
+
+# an outbound action that survives a crash without firing twice
+outbox.fire(action_id, executor)   # records a firing intent BEFORE the world;
+# a retry after a crash → DoubleFireError, never a second send
+
+# a self-improvement the agent proposes but cannot apply alone
+engine.can_take_effect(proposal_id)
+# → UnverifiedProposalError until an independent verdict AND a human's yes
 ```
 
 ## What this is not
@@ -317,6 +402,10 @@ RuleVerifier("witness:a").verify(claim_by_witness_a)
 
 ---
 
-*Built 2026-07-15 in a Cowork session, from the corpus in `~/atlas`, the builds
-on `~/Desktop`, and the July 2026 harness field. the acceptance suite + 10 adversarial
-scenarios, zero runtime dependencies.*
+*Built 2026-07-15 from the corpus in `~/atlas`, the builds on `~/Desktop`, and the
+July 2026 harness field; hardened through 2026-07-21 against two external audits
+(an infrastructure/reliability pass and a context-engineering pass), with the
+highest-stakes changes independently re-verified by a separate agent — the harness's
+own maker≠verifier doctrine, applied to itself. 27 triangulated decisions, the
+acceptance suite + 10 adversarial scenarios on CI, zero runtime dependencies in the
+core.*
