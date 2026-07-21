@@ -87,7 +87,11 @@ def test_verified_self_change_may_take_effect(ledger):
                         evidence_ids=[e1.id, e2.id])
     entry = r.run("s1", "reflected on a recurring burn", GOODLEARNED, self_change=change)
     assert entry.body["self_change"]["verified"] is True
-    applied = r.apply_self_change(entry.id)                     # allowed
+    # go-live hardening (lane H): apply now re-derives BOTH gates from the record,
+    # the same two-gate rule the improvement path enforces — a verified change is
+    # not, by itself, a licence to change; a named human must also ratify it.
+    r.ratify_self_change(entry.id, human="alex")
+    applied = r.apply_self_change(entry.id)                     # allowed: verified + ratified
     assert applied["target"] == "EMP:friction (append)"
 
 

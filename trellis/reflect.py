@@ -30,7 +30,8 @@ from typing import Optional
 from .clock import TimeGround
 from .decisions import DecisionLog
 from .emp import lint_mortality
-from .identity import same_identity
+from .identity import (is_effectively_blank, is_independent, require_identity,
+                       same_identity)
 from .ledger import Entry, Ledger
 from .loops import LoopSpec
 from .memory import _fails_synthesis
@@ -38,6 +39,12 @@ from .verify import CompletionClaim, Evidence, EvidenceKind, Verifier, record_ve
 
 
 REFLECTION_KIND = "reflection_log"
+#: A human's yes on a reflection's self-change, recorded append-only. The reflect
+#: path must gate identically to the improvement path (two gates: an independent
+#: verified verdict AND a named human's ratification) — an unequal gate was a
+#: privilege-escalation seam (Fable). Kept as its own kind so ratification is
+#: re-derived from the record, never from the reflection body's own flag.
+SELF_CHANGE_RATIFICATION_KIND = "self_change_ratification"
 DEFAULT_CADENCE = timedelta(hours=24)   # D-B: once-daily
 
 
@@ -251,17 +258,46 @@ class ReflectionRitual:
             record["verified"] = verdict.status.value == "verified"
         return record
 
-    def apply_self_change(self, reflection_entry_id: str) -> dict:
-        """A self-change may take effect ONLY if the LEDGER carries an independent
-        verified verdict for its claim. Otherwise refuse — an unverified self-
-        change taking effect is the harness self-certifying, which it must never
-        do.
+    def ratify_self_change(self, reflection_entry_id: str, human: str) -> Entry:
+        """A HUMAN accepts a reflection's self-change — the SECOND gate, matching
+        the improvement path exactly (an independent verified verdict is not, by
+        itself, a licence to change). Recorded append-only so `apply_self_change`
+        re-derives the yes from the record, never from a flag.
 
-        We RE-DERIVE trust from the append-only record rather than trusting the
-        reflection body's self-reported `verified` flag (the Phase-2.6 adversary's
-        MED): a hand-crafted reflection_log claiming verified=True must still
-        produce a real `verification` entry, by a party who is not the maker, to
-        take effect. The record is the authority, not the claim about it."""
+        Independence-guarded like every human seat: the proposing agent cannot
+        ratify its own change, and the human runs through require_identity so a
+        blank yes or a homoglyph ratifier is refused at the gate (FableG8)."""
+        human = require_identity(human, "ratifier")
+        e = self.ledger.get(reflection_entry_id)
+        if e is None or e.kind != REFLECTION_KIND:
+            raise KeyError(f"no reflection_log entry {reflection_entry_id}")
+        change = e.body.get("self_change")
+        if not change:
+            raise KeyError("this reflection proposed no self-change")
+        if same_identity(human, e.author):
+            raise UnverifiedSelfChangeError(
+                "the proposing agent cannot ratify its own self-change — ratification "
+                "is the human seat (stage-don't-fire).")
+        return self.ledger.append(
+            kind=SELF_CHANGE_RATIFICATION_KIND, author=human,
+            body={"reflection_id": reflection_entry_id, "claim_id": change.get("claim_id"),
+                  "target": change.get("target"), "ratified_by": human},
+            tags=("self_change", "ratified"))
+
+    def apply_self_change(self, reflection_entry_id: str) -> dict:
+        """A self-change may take effect ONLY behind BOTH gates, re-derived from
+        the append-only record: (a) an INDEPENDENT verified verdict for its claim,
+        AND (b) a named human's ratification. An unverified — or unratified —
+        self-change taking effect is the harness self-certifying / self-authorizing,
+        which it must never do. This is the SAME two-gate rule the improvement path
+        enforces (selfimprove.can_take_effect); the reflect path previously required
+        only gate (a), an unequal gate that was a privilege-escalation seam (Fable).
+
+        We RE-DERIVE trust from the record rather than trusting the reflection
+        body's self-reported `verified` flag (the Phase-2.6 adversary's MED): a
+        hand-crafted reflection_log claiming verified=True must still produce a
+        real `verification` entry, by a party who is not the maker, AND a real
+        ratification entry, to take effect. The record is the authority."""
         e = self.ledger.get(reflection_entry_id)
         if e is None or e.kind != REFLECTION_KIND:
             raise KeyError(f"no reflection_log entry {reflection_entry_id}")
@@ -270,14 +306,14 @@ class ReflectionRitual:
             raise KeyError("this reflection proposed no self-change")
         maker = e.author
         claim_id = change.get("claim_id")
-        # find an INDEPENDENT verified verdict for this exact claim in the ledger
+        # GATE (a) — an INDEPENDENT verified verdict for this exact claim.
         independent_ok = False
         if claim_id:
             for v in self.ledger.entries():
                 if (v.kind == "verification"
                         and v.body.get("claim_id") == claim_id
                         and v.body.get("status") == "verified"
-                        and not same_identity(v.author, maker)):
+                        and is_independent(maker, v.author)):
                     independent_ok = True
                     break
         if not independent_ok:
@@ -286,4 +322,17 @@ class ReflectionRitual:
                 f"verdict on the record (claim={claim_id}, verdict="
                 f"{change.get('verdict')}) — it cannot take effect. The ledger, not "
                 "the reflection's own flag, is the authority.")
+        # GATE (b) — a named human's ratification, by a party who is not the maker.
+        ratified_ok = any(
+            r.kind == SELF_CHANGE_RATIFICATION_KIND
+            and r.body.get("reflection_id") == reflection_entry_id
+            and is_independent(maker, r.author)
+            and not is_effectively_blank(r.body.get("ratified_by", ""))
+            for r in self.ledger.entries())
+        if not ratified_ok:
+            raise UnverifiedSelfChangeError(
+                f"self-change {change.get('target')!r} is verified but NOT human-"
+                "ratified — a named human must say yes before it takes effect "
+                "(stage-don't-fire, W3). This is the same two-gate rule the "
+                "improvement path enforces; the reflect path is no softer.")
         return change

@@ -39,7 +39,8 @@ from typing import Optional
 from .clock import TimeGround
 from .decisions import question_key
 from .emp import lint_identity
-from .identity import is_effectively_blank, same_identity
+from .identity import (is_effectively_blank, is_independent, require_identity,
+                       same_identity)
 from .ledger import Entry, Ledger
 from .verify import (CompletionClaim, Evidence, EvidenceKind, Verifier,
                      record_verdict)
@@ -138,9 +139,11 @@ class SkillEstate:
     def promote(self, skill_id: str, human: str, to: SkillTrust) -> Entry:
         """Move a skill up a trust tier. HUMAN-ONLY (W1): the agent may propose a
         skill, but only a human review moves it to local-reviewed/installed. A
-        blank human, or an agent trying to self-promote, is refused."""
-        if is_effectively_blank(human):
-            raise ValueError("a skill promotion names the human who reviewed it (W1)")
+        blank human, or an agent trying to self-promote, is refused. The human
+        runs through require_identity (identity.py) so a Cyrillic-homoglyph
+        reviewer is REFUSED at the gate, never accepted as a distinct actor
+        (FableG8 — the round-4 attack class identity.py claims closed)."""
+        human = require_identity(human, "reviewer")
         head = next((e for e in self.ledger.active(SKILL_KIND)
                      if e.body.get("skill_id") == skill_id), None)
         if head is None:
@@ -218,6 +221,34 @@ class ImprovementProposal:
         return "T"   # everything else starts as an open call for the human's judgment
 
 
+def _root_proposal(ledger: Ledger, e: Entry) -> Entry:
+    """Walk the supersession chain back to the ORIGINAL proposal entry — its
+    author is the MAKER of record. Independence must be derived from who actually
+    authored the proposal on the ledger, never from an engine constructor field
+    (Fable: a portal hardcoding author='witness' must not launder a maker-forged
+    verification when the live maker is 'witness:<emp>')."""
+    cur = e
+    while cur is not None and cur.supersedes:
+        prev = ledger.get(cur.supersedes)
+        if prev is None or prev.kind != PROPOSAL_KIND:
+            break
+        cur = prev
+    return cur
+
+
+def _has_independent_verified_verdict(ledger: Ledger, claim_id, maker: str) -> bool:
+    """True iff the append-only record carries a `verification` for this exact
+    claim, status verified, authored by a party who is NOT the maker."""
+    if not claim_id:
+        return False
+    for v in ledger.entries():
+        if (v.kind == "verification" and v.body.get("claim_id") == claim_id
+                and v.body.get("status") == "verified"
+                and is_independent(maker, v.author)):
+            return True
+    return False
+
+
 class ImprovementEngine:
     """Stages improvement proposals and gates their application, reusing the
     reflect.py safety core exactly — this adds NO new verify or apply authority."""
@@ -277,9 +308,12 @@ class ImprovementEngine:
         """A HUMAN accepts a proposal. Independence-guarded like every human seat:
         the proposing agent cannot ratify its own proposal, and a blank human is
         not a yes. This records the human's yes; it does NOT itself mutate anything
-        — installing the skill / editing the EMP is the human's separate action."""
-        if is_effectively_blank(human):
-            raise ValueError("ratification names a human — a blank yes is not a yes")
+        — installing the skill / editing the EMP is the human's separate action.
+
+        The human runs through require_identity (identity.py): a blank yes, or a
+        Cyrillic-homoglyph ratifier posing as a distinct human, is REFUSED at the
+        gate rather than accepted (FableG8 — closes the round-4 homoglyph seat)."""
+        human = require_identity(human, "ratifier")
         e = self.ledger.get(proposal_entry_id)
         if e is None or e.kind != PROPOSAL_KIND:
             raise KeyError(f"no improvement_proposal {proposal_entry_id}")
@@ -296,9 +330,10 @@ class ImprovementEngine:
     def reject(self, proposal_entry_id: str, human: str, reason: str = "") -> Entry:
         """A HUMAN declines a proposal. Recorded (never deleted) so the trail keeps
         the 'no'; the proposal drops out of the open queue. Independence-guarded
-        like ratify — the proposing agent cannot reject-and-move-on for the human."""
-        if is_effectively_blank(human):
-            raise ValueError("a rejection names the human who declined it")
+        like ratify — the proposing agent cannot reject-and-move-on for the human.
+
+        require_identity guards the seat: a homoglyph 'human' is refused (FableG8)."""
+        human = require_identity(human, "human")
         e = self.ledger.get(proposal_entry_id)
         if e is None or e.kind != PROPOSAL_KIND:
             raise KeyError(f"no improvement_proposal {proposal_entry_id}")
@@ -319,17 +354,15 @@ class ImprovementEngine:
         e = self.ledger.get(proposal_entry_id)
         if e is None or e.kind != PROPOSAL_KIND:
             raise KeyError(f"no improvement_proposal {proposal_entry_id}")
-        maker = self.author
+        # The MAKER is whoever authored the proposal ON THE RECORD, not this
+        # engine's configured self.author — otherwise a portal hardcoding a bare
+        # 'witness' would treat a verification authored by the live maker
+        # 'witness:<emp>' as independent and launder a maker-forged verdict (Fable).
+        root = _root_proposal(self.ledger, e)
+        maker = root.author if root is not None else e.author
         claim_id = e.body.get("claim_id")
         # (a) an INDEPENDENT verified verdict for this exact claim
-        independent_ok = False
-        if claim_id:
-            for v in self.ledger.entries():
-                if (v.kind == "verification" and v.body.get("claim_id") == claim_id
-                        and v.body.get("status") == "verified"
-                        and not same_identity(v.author, maker)):
-                    independent_ok = True
-                    break
+        independent_ok = _has_independent_verified_verdict(self.ledger, claim_id, maker)
         if not independent_ok:
             raise UnverifiedProposalError(
                 f"proposal {e.body.get('target')!r} has no independent verified verdict "
@@ -337,8 +370,9 @@ class ImprovementEngine:
         # (b) a human ratification (disposition Y by a non-maker)
         head = next((x for x in self.ledger.active(PROPOSAL_KIND)
                      if x.body.get("proposal_id") == e.body.get("proposal_id")), e)
-        if head.body.get("disposition") != "Y" or same_identity(
-                head.author, maker) or is_effectively_blank(head.body.get("ratified_by", "")):
+        if (head.body.get("disposition") != "Y"
+                or not is_independent(maker, head.author)
+                or is_effectively_blank(head.body.get("ratified_by", ""))):
             raise UnverifiedProposalError(
                 "proposal is verified but not human-ratified — a human must say yes "
                 "before it takes effect (stage-don't-fire, W3).")
@@ -548,14 +582,26 @@ class ImprovementLoop:
         merely-verified-but-unratified proposal, does NOT close it: the map has to
         have actually moved on how the agent works. Reuses curiosity.resolve's
         pursued-map-move gate, so the close is honest by construction."""
-        from .curiosity import assumption_key
+        from .curiosity import assumption_key, NotResolvedError
         author = author or self.agent_id
         if ratified_proposal.kind != PROPOSAL_KIND or ratified_proposal.body.get("disposition") != "Y":
-            from .curiosity import NotResolvedError
             raise NotResolvedError(
                 "an improvement question closes only on a RATIFIED proposal (disposition "
                 "Y) — noticing the stumble, or even verifying a fix, is not improving until "
                 "a human ratifies the change")
+        # The two-gate rule (Fable): a ratified proposal closes a question ONLY if
+        # the record ALSO carries an INDEPENDENT VERIFIED verdict for it. A human
+        # 'yes' on an unverified proposal is not a fix — human-ratification alone
+        # is one gate, not both. (Topical-fit matching and the actual APPLY step
+        # are a later phase; see decisions_needed.)
+        root = _root_proposal(self.ledger, ratified_proposal)
+        maker = root.author if root is not None else ratified_proposal.author
+        if not _has_independent_verified_verdict(
+                self.ledger, ratified_proposal.body.get("claim_id"), maker):
+            raise NotResolvedError(
+                "a ratified proposal closes a question only WITH an independent verified "
+                "verdict on the record (the two-gate rule) — a human-yes on an unverified "
+                "proposal cannot close an improvement question")
         akey = assumption_key(_IMPROVEMENT_ASSUMPTION.format(kind=kind))
         # record the pursued map-move (the ratification), then resolve the question
         self.questions.record_seek(akey, f"ratified a fix for the recurring '{kind}' stumble",
