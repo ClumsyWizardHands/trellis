@@ -33,11 +33,15 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Iterable, Optional
+from typing import TYPE_CHECKING, Iterable, Optional
 
 from .clock import TimeGround
 from .ledger import Ledger, Entry
+from .sources import RawItem
 from .surfaces import ConversationKey, Surface, ThreadRef
+
+if TYPE_CHECKING:  # avoid importing the registry at module load — it is only a hint
+    from .registry import IdentityRegistry
 
 
 # ----- source records (what your fetchers produce) --------------------------
@@ -53,6 +57,7 @@ class DiscordMessage:
     thread_id: Optional[str] = None
     message_id: str = ""
     is_dm: bool = False
+    author_id: str = ""         # the Discord snowflake — permanent identity (D32); optional
 
 
 @dataclass(frozen=True)
@@ -96,6 +101,44 @@ def ingest_discord(ledger: Ledger, messages: Iterable[DiscordMessage],
             tags=("discord", m.channel_name or m.channel, m.author))
         out.append(entry)
     return out
+
+
+def discord_to_rawitem(m: DiscordMessage, registry: "Optional[IdentityRegistry]" = None,
+                       agent: str = "trellis") -> RawItem:
+    """Bridge a live Discord message onto the idempotent Ingestor's RawItem (D31).
+
+    `item_id = message_id`, so a re-poll of the same message shares one
+    `RawItem.identity_key()` and is recognised as a duplicate, not double-written.
+    The surface/thread/channel_name/author_id and the ConversationKey's
+    `storage_key` ride in `meta` so the harvester can file the entry exactly as the
+    raw append path did — under an agent-scoped, privacy-injective key.
+
+    Attribution is still required (the audit's user_id=0 bug): a blank author is
+    refused, loudly. The author_id snowflake resolves to a STABLE canonical human
+    (D32/G11) via the IdentityRegistry so a display-name rename cannot move the
+    identity a DM conversation is keyed on; with no snowflake it falls back to the
+    display name."""
+    if not m.author or not m.author.strip():
+        raise ValueError(f"message {m.message_id or '?'} has no author — "
+                         "attribution is required, not optional")
+    surface = (Surface.DM if m.is_dm
+               else Surface.THREAD if m.thread_id else Surface.CHANNEL)
+    canonical = ""
+    if registry is not None and m.author_id.strip():
+        canonical = registry.resolve(m.author_id, m.author)
+    # A DM individuates on the stable canonical human (its content stays private to
+    # that human); a broadcast surface has no counterpart human in the key.
+    human = (canonical or m.author) if m.is_dm else ""
+    key = ConversationKey(
+        agent=agent, surface=surface, scope=m.channel, human=human,
+        thread=ThreadRef(m.thread_id, m.channel) if m.thread_id else None)
+    meta = (("surface", surface.value), ("thread", m.thread_id or ""),
+            ("channel_name", m.channel_name), ("author", m.author),
+            ("author_id", m.author_id), ("canonical_author", canonical),
+            ("storage_key", key.storage_key()))
+    return RawItem(source="discord", channel=m.channel, content=m.content,
+                   event_time=m.posted_at, item_id=m.message_id, kind="message",
+                   meta=meta)
 
 
 def ingest_calendar(ledger: Ledger, events: Iterable[CalendarEvent],

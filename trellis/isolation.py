@@ -32,10 +32,12 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass, field
-from typing import Callable, Iterable, Iterator, TypeVar
+from typing import Callable, Iterable, Iterator, Optional, TypeVar
 
 from .ledger import Entry, Ledger
-from .ingest import DiscordMessage, ingest_discord
+from .ingest import DiscordMessage, discord_to_rawitem, ingest_discord
+from .registry import IdentityRegistry
+from .sources import Harvester, IngestResult, Ingestor, Provenance, RawItem
 
 T = TypeVar("T")
 
@@ -146,6 +148,98 @@ def ingest_scoped_discord(ledger: Ledger, messages: Iterable[DiscordMessage],
     """Ingest ONLY the messages on trellis's read-allowlisted surfaces, stamped as
     trellis. A batch mixing trellis's channel with another agent's channel lands
     only trellis's in the ledger — the others never reach it. This is the
-    'separate all other agents from trellis' guarantee, enforced at ingest."""
+    'separate all other agents from trellis' guarantee, enforced at ingest.
+
+    LEGACY (kept for the raw-append callers): this path is NOT idempotent and does
+    NOT admit a thread via its parent channel. New live-Discord ingestion should
+    use `ingest_scoped_discord_idempotent` (D31/D32)."""
     kept = list(iso.allow.filter_readable(messages, surface_of))
     return ingest_discord(ledger, kept, agent=iso.identity.name)
+
+
+# ----- the idempotent live-Discord bridge (D31 + D32) -----------------------
+
+
+def _readable_surface(m: DiscordMessage, allow: SurfaceAllowlist) -> Optional[str]:
+    """The allowlisted surface id this message is admitted under, or None.
+
+    D32 (channel ⇒ threads): thread ids are dynamic and can't be pre-listed, so a
+    threaded message is readable when its PARENT CHANNEL is allowlisted. The own-
+    surface is tried first (a directly-allowlisted thread still works), then the
+    parent-channel fallback. A message admitted under neither is a real drop — its
+    surface is returned to the caller for the dropped-per-surface counter, never
+    discarded silently."""
+    own = m.thread_id or m.channel
+    if allow.may_read(own):
+        return own
+    if m.thread_id and allow.may_read(m.channel):     # parent-channel fallback
+        return m.channel
+    return None
+
+
+@dataclass
+class ScopedIngestResult:
+    """The outcome of a scoped idempotent poll: the Ingestor's idempotency result,
+    plus an HONEST drop accounting — how many messages were refused and under which
+    surface id, so a dropped message is always counted, never silently discarded."""
+    result: IngestResult
+    admitted: int = 0
+    dropped: int = 0
+    dropped_by_surface: dict = field(default_factory=dict)
+
+
+def _discord_harvester(ledger: Ledger, agent: str) -> Harvester:
+    """Turn a bridged Discord RawItem into one `discord_message` ledger entry —
+    the same body shape the raw append path produced (so `position_history` and
+    the surface keying are unchanged), carrying the item's provenance so a
+    correction/resume can find and retire it."""
+    def h(item: RawItem, prov: Provenance) -> list:
+        meta = dict(item.meta)
+        author = meta.get("author", "")
+        if not author.strip():
+            raise ValueError("bridged discord item has no author — attribution "
+                             "is required, not optional")
+        channel_name = meta.get("channel_name", "")
+        e = ledger.append(
+            kind="discord_message", author=author,
+            body={"content": item.content, "channel": item.channel,
+                  "channel_name": channel_name, "message_id": item.item_id,
+                  "surface": meta.get("surface", ""),
+                  "storage_key": meta.get("storage_key", ""),
+                  "author_id": meta.get("author_id", ""),
+                  "canonical_author": meta.get("canonical_author", ""),
+                  "provenance": prov.to_dict()},
+            event_time=item.event_time,
+            tags=("discord", channel_name or item.channel, author))
+        return [e.id]
+    return h
+
+
+def ingest_scoped_discord_idempotent(
+        ledger: Ledger, messages: Iterable[DiscordMessage], iso: Isolation,
+        registry: Optional[IdentityRegistry] = None,
+        harvester: Optional[Harvester] = None) -> ScopedIngestResult:
+    """Route live Discord messages through the IDEMPOTENT sources.Ingestor (D31),
+    scoped to trellis's read allowlist with the D32 channel⇒threads admission.
+
+    A re-poll of the same messages is a NO-OP (identity-keyed on message_id): the
+    second pass writes nothing new. A message on a surface trellis may not read is
+    dropped AND counted per surface (never silent). The author_id snowflake is
+    resolved to a stable canonical id so a rename can't poison attribution."""
+    allow = iso.allow
+    agent = iso.identity.name
+    admitted: list[RawItem] = []
+    dropped_by_surface: dict = {}
+    for m in messages:
+        sid = _readable_surface(m, allow)
+        if sid is None:
+            key = m.thread_id or m.channel
+            dropped_by_surface[key] = dropped_by_surface.get(key, 0) + 1
+            continue
+        admitted.append(discord_to_rawitem(m, registry=registry, agent=agent))
+    ing = Ingestor(ledger, author=agent)
+    result = ing.ingest(admitted, harvester or _discord_harvester(ledger, agent))
+    return ScopedIngestResult(
+        result=result, admitted=len(admitted),
+        dropped=sum(dropped_by_surface.values()),
+        dropped_by_surface=dropped_by_surface)
