@@ -38,6 +38,29 @@ class ClaudeSDKProvider:
                 "MockProvider / OpenAICompatProvider."
             ) from e
 
+    def preflight(self) -> dict:
+        """Honest readiness for the hosted claude seat.
+
+        Verifies a credential is present and well-formed BEFORE doctor can
+        report READY. Without this, doctor printed READY for a wrong or absent
+        API key — contradicting its own maker≠verifier contract (FableG14). No
+        network call is made here (that would spend a token on every doctor
+        run); the credential shape is checked, and that is what the note says.
+        """
+        import os
+        key = os.environ.get("ANTHROPIC_API_KEY", "").strip()
+        if not key:
+            raise ProviderUnavailable(
+                "ANTHROPIC_API_KEY is unset — the claude seat has no credential. "
+                "doctor refuses to report READY for a seat it cannot authenticate.")
+        if not key.startswith("sk-ant-"):
+            raise ProviderUnavailable(
+                "ANTHROPIC_API_KEY is set but not well-formed (Anthropic keys "
+                "begin 'sk-ant-'). Refusing to report READY on a malformed "
+                "credential rather than fail at the first live call.")
+        return {"ok": True, "context_confirmed": True,
+                "note": "API key present and well-formed (not network-checked)"}
+
     def complete(self, system: str, messages: list[dict],
                  tools: Optional[list[dict]] = None) -> ProviderResponse:
         import anyio

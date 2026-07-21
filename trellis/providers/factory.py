@@ -53,7 +53,14 @@ def provider_from_env() -> Provider:
                         "e.g. http://localhost:11434/v1 for Ollama")
         model = _require("TRELLIS_LOCAL_MODEL", "e.g. gemma3")
         key = os.environ.get("TRELLIS_LOCAL_API_KEY", "not-needed")
-        min_ctx = int(os.environ.get("TRELLIS_MIN_CONTEXT", "16000"))
+        raw_ctx = os.environ.get("TRELLIS_MIN_CONTEXT", "16000").strip()
+        try:
+            min_ctx = int(raw_ctx)
+        except ValueError as e:
+            # A malformed numeric config is a loud ProviderUnavailable, not an
+            # uncaught ValueError traceback out of doctor (Codex#14).
+            raise ProviderUnavailable(
+                f"TRELLIS_MIN_CONTEXT must be an integer, got {raw_ctx!r}.") from e
         return OpenAICompatProvider(base_url=base, model=model,
                                     api_key=key, min_context=min_ctx)
 

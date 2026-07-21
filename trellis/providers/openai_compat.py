@@ -42,14 +42,34 @@ class OpenAICompatProvider:
                 f"{self.base_url}/models",
                 headers={"Authorization": f"Bearer {self.api_key}"})
             with urllib.request.urlopen(req, timeout=10) as r:
-                data = json.loads(r.read().decode("utf-8"))
+                raw = r.read().decode("utf-8")
         except Exception as e:
             raise ProviderUnavailable(
                 f"endpoint {self.base_url} unreachable ({e}). If this is Ollama, "
                 "remember OLLAMA_CONTEXT_LENGTH — a silent 4k context is a "
                 "recorded failure mode. This adapter refuses to guess.") from e
 
-        models = data.get("data", [])
+        # A well-formed HTTP 200 is not proof of a well-formed body. Normalize any
+        # malformed-shape / non-JSON payload to a consistent ProviderUnavailable —
+        # a raw JSONDecodeError/AttributeError leaking to the caller is a silent
+        # failure. Never echo the body or the api_key in the message.
+        try:
+            data = json.loads(raw)
+            models = data["data"]
+            ids = [m.get("id") for m in models]
+        except (ValueError, KeyError, TypeError, AttributeError) as e:
+            raise ProviderUnavailable(
+                f"endpoint {self.base_url} returned a malformed /models response "
+                f"({type(e).__name__}) — cannot confirm the model seat.") from e
+
+        # The configured model MUST be served. A preflight that says ok:true for a
+        # model the endpoint does not have is a lie the loop pays for later.
+        if self.model not in ids:
+            available = ", ".join(str(i) for i in ids if i) or "none"
+            raise ProviderUnavailable(
+                f"configured model {self.model!r} is not served by "
+                f"{self.base_url} (available: {available}).")
+
         reported = None
         for m in models:
             if m.get("id") == self.model:
