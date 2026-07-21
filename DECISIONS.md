@@ -757,6 +757,39 @@ same-record-same-image guarantee, and every stat→mark mapping are preserved �
 
 ---
 
+## D30 — trellis is isolated from the other agents by identity + allowlist ✅ fresh
+
+**Decision:** in a many-agent estate sharing a server-wide bridge, trellis touches only its
+**own** surfaces, enforced **structurally**, not by convention. trellis authenticates as its
+**own identity** (its own credentials, referenced by env-var name — the secret is never stored,
+logged, or laddered onto another agent's) and may only read from / act on an **explicit
+allowlist** of surface ids. READ and ACT are **separate** allowlists (it may watch a channel it
+must never post into). A shared bridge's other-agent traffic is dropped on read (`filter_readable`)
+and refused on act (`guard_act` raises — sending to the wrong place is irreversible). The empty
+allowlist is the default, so an unconfigured trellis is **inert, not omnivorous**.
+
+**Triangulation:**
+1. Alex, 2026-07-21: chose "own identity + allowlist (physical isolation)", scoped to trellis
+   only, when asked how to separate trellis from the many other agents on his system.
+2. `surfaces.py` D7 ("privacy lives in the key"; the injective `storage_key`) + the recorded leak
+   it answers (*"our agents are leaking private chief discussions into other channels… stop
+   that"*): isolation belongs in structure, not filter-discipline. The new `agent`-scoped gate is
+   the outer layer of the same principle; `storage_key` already namespaces the ledger by agent.
+3. Verified estate reality (2026-07-21): ~25+ agent dirs on the machine, several with their own
+   gateways; the reachable bridge is server-wide (sees `#vex-atlas-work`, `#daedalus`, …). Filter
+   discipline on a shared identity would let a bug reach another agent's channel — credential
+   scoping cannot.
+
+**Consequence:** new `trellis/isolation.py` (`AgentIdentity`, `SurfaceAllowlist`, `Isolation`,
+`ingest_scoped_discord`) + `tests/test_isolation.py` (10 tests, incl. the money test: a mixed
+server-wide batch lands only trellis's channel, stamped `agent="trellis"`; the other agent's
+message never reaches the ledger). This is the OUTER gate; it composes with surfaces.py's inner
+flow rules. **Seam remaining (gated, human-owned):** the live Discord/Drive fetchers + the send
+executor are not built — they need a trellis-owned bot Alex creates and the allowlist ids, and
+the executor stays behind an explicit human "arm it" (W3 still stands).
+
+---
+
 ## ⏳ Watch list (decisions deliberately NOT taken)
 
 - **W1 — No skill marketplace / no auto-installed skills.** [OPENCLAW] supply-chain
