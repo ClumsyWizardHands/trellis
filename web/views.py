@@ -496,6 +496,70 @@ def ingestion_status(ledger: Ledger, ground: Optional[TimeGround] = None) -> dic
     return {**cov, "observations": observations}
 
 
+# ---- session log: the transparency surface (D32, D36) ----------------------
+
+def session_log(ledger: Ledger, registry, ground: Optional[TimeGround] = None) -> list[dict]:
+    """The legible list of conversations — who, on what surface, how many
+    messages, and how long since the last one. D36's transparency surface:
+    everything is recorded within sessions, and this is where you can see them.
+    DM sessions are individuated per interlocutor and labelled by the current
+    display name (a rename follows the label but keeps the session)."""
+    from trellis.sessions import derive_sessions
+    g = _ground(ledger, ground)
+    rows = []
+    for s in derive_sessions(ledger, registry):
+        if s.surface == "dm":
+            who = s.label or s.person_id or "someone"
+        elif s.surface == "thread":
+            who = f"thread in #{s.channel_name}"
+        else:
+            who = f"#{s.channel_name}"
+        rows.append({
+            "session_id": s.session_id,
+            "who": who,
+            "surface": s.surface,
+            "channel": s.channel_name,
+            "person_id": s.person_id,
+            "count": s.message_count,
+            "last": s.last_at.isoformat(),
+            "age": g.age_phrase(s.last_at),
+        })
+    return rows
+
+
+def session_detail(ledger: Ledger, registry, session_id: str,
+                   ground: Optional[TimeGround] = None) -> Optional[dict]:
+    """One session's header + its time-ordered transcript. None if no such
+    session. Pure read — the DM stays where it was said (D36 DM-scoping is
+    upstream; this view never crosses a DM into a channel context)."""
+    from trellis.sessions import derive_sessions, session_transcript
+    g = _ground(ledger, ground)
+    sess = next((s for s in derive_sessions(ledger, registry)
+                 if s.session_id == session_id), None)
+    if sess is None:
+        return None
+    msgs = [{"author": m["author"], "content": m["content"],
+             "message_id": m["message_id"],
+             "when": m["when"].isoformat(), "age": g.age_phrase(m["when"])}
+            for m in session_transcript(ledger, session_id)]
+    if sess.surface == "dm":
+        who = sess.label or sess.person_id or "someone"
+    elif sess.surface == "thread":
+        who = f"thread in #{sess.channel_name}"
+    else:
+        who = f"#{sess.channel_name}"
+    return {
+        "session_id": sess.session_id,
+        "who": who,
+        "surface": sess.surface,
+        "channel": sess.channel_name,
+        "person_id": sess.person_id,
+        "count": sess.message_count,
+        "age": g.age_phrase(sess.last_at),
+        "messages": msgs,
+    }
+
+
 def improvement_view(ledger: Ledger, ground: Optional[TimeGround] = None) -> dict:
     """The self-improvement surface: the recurring stumbles the agent is flagging
     about ITSELF (staleness-railed), and the self-change proposals awaiting the

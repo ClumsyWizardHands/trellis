@@ -95,6 +95,7 @@ NAV = [
     ("/map", "The Map", "what the room decided — and what the agent thinks about it"),
     ("/curiosities", "Assumptions", "where it knows it's assuming, and what it's chasing"),
     ("/ingestion", "Ingestion", "what's been taken in and understood — coverage and gaps"),
+    ("/sessions", "Sessions", "every conversation on the record — who, where, and what was said"),
     ("/decisions", "Decisions", "every Yes / No / Triangulate — click one to walk its reasoning"),
     ("/reflection", "Reflection", "once a day, the agent looks at itself in the mirror of its record"),
     ("/improvement", "Improvement", "how it wants to get better at its own job — proposals you ratify"),
@@ -668,6 +669,75 @@ def curiosities_page(frag: int = 0):
 @app.get("/ingestion", response_class=HTMLResponse)
 def ingestion_page(frag: int = 0):
     return _respond("/ingestion", _ingestion_body(_ledger()), bool(frag))
+
+
+def _sessions_body(led: Ledger) -> str:
+    from trellis.registry import IdentityRegistry
+    rows = views.session_log(led, IdentityRegistry(led))
+    out = [_pagehead("Sessions",
+                     "Every conversation the agent is on the record for — DMs individuated "
+                     "per person, threads on their own, each channel as one rolling session.")]
+    out.append('<div class="legend">Transparency is the operating principle: <b>everything is '
+               'recorded within sessions</b>, and anyone who speaks to this agent should know '
+               'they are being recorded. A <b>DM stays private to the person it is with</b> — it '
+               'never crosses into a channel. Click a session to read its transcript.</div>')
+    out.append('<div class="panel">')
+    if not rows:
+        out.append('<div class="muted small">No conversations on the record yet — sessions '
+                   'appear here as Discord messages come through.</div>')
+    for r in rows:
+        pill = {"dm": "T", "thread": "N", "channel": "Y"}.get(r["surface"], "N")
+        out.append(f'<div class="row"><div>'
+                   f'<span class="pill {pill}">{esc(r["surface"])}</span> '
+                   f'<a href="/session/{esc(r["session_id"])}">{esc(r["who"])}</a>'
+                   f'<div class="muted small">#{esc(r["channel"])}'
+                   + (f' · id {esc(r["person_id"])}' if r["person_id"] else '')
+                   + f'</div></div>'
+                   f'<span class="muted small">{r["count"]} message(s) · {esc(r["age"])}</span></div>')
+    out.append('</div>')
+    return "".join(out)
+
+
+def _session_detail_body(led: Ledger, session_id: str) -> str:
+    from trellis.registry import IdentityRegistry
+    d = views.session_detail(led, IdentityRegistry(led), session_id)
+    if d is None:
+        return _pagehead("Session not found", "No session with that id.") + \
+               '<div class="panel"><a href="/sessions">← all sessions</a></div>'
+    out = [_pagehead(f"Session · {d['who']}",
+                     "The full transcript, oldest first — the legible record of who said what. "
+                     "A DM is shown only here, scoped to the person it is with; it never crosses "
+                     "into a channel context.")]
+    out.append('<div class="panel"><a href="/sessions">← all sessions</a></div>')
+    out.append(f'<div class="panel"><div class="kv">'
+               f'<span class="chip">{esc(d["surface"])}</span>'
+               f'<span class="chip">#{esc(d["channel"])}</span>'
+               + (f'<span class="chip">id {esc(d["person_id"])}</span>' if d["person_id"] else '')
+               + f'<span class="chip">{d["count"]} message(s)</span>'
+               f'<span class="chip">last {esc(d["age"])}</span></div></div>')
+    out.append('<div class="panel"><ul class="feed">')
+    for m in d["messages"]:
+        out.append(f'<li><span class="muted small" style="min-width:62px">{esc(m["age"])}</span>'
+                   f'<span><span class="who">{esc(m["author"])}</span> {esc(m["content"])}</span></li>')
+    if not d["messages"]:
+        out.append('<li class="muted small">no messages in this session.</li>')
+    out.append('</ul></div>')
+    return "".join(out)
+
+
+@app.get("/sessions", response_class=HTMLResponse)
+def sessions_page(frag: int = 0):
+    return _respond("/sessions", _sessions_body(_ledger()), bool(frag))
+
+
+@app.get("/session/{session_id}", response_class=HTMLResponse)
+def session_detail_page(session_id: str, frag: int = 0):
+    body = _session_detail_body(_ledger(), session_id)
+    if frag:
+        return HTMLResponse(body)
+    return HTMLResponse(SHELL.format(
+        title="Sessions", style=STYLE, ledger=esc(Path(LEDGER_PATH).name),
+        nav=_nav_html("/sessions"), path=f"/session/{session_id}", body=body))
 
 
 @app.get("/login", response_class=HTMLResponse)
