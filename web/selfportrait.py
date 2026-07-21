@@ -13,7 +13,7 @@ is performed selfhood, the soul leaking back in through the picture. So instead:
     reflection_log). The agent never paints itself however it feels — the record
     paints it. Same snapshot → same portrait, always.
   * "Builds on the previous day" is made literal and honest three ways: today's
-    portrait is drawn with YESTERDAY's creature as a faint ghost behind it (today
+    portrait is drawn with YESTERDAY's self-image as a faint ghost behind it (today
     visibly grows out of yesterday); a MORPH crossfades yesterday → today (the
     change you see IS the change in the record); and the growth STRIP shows the
     whole bitemporal chain. Continuity is real because it interpolates two REAL
@@ -58,7 +58,7 @@ def snapshot_series(ledger, include_live: bool = True) -> list[tuple[str, GlyphS
 
 def render_self_portrait(today: GlyphStats, prev: Optional[GlyphStats] = None,
                          size: int = 240) -> str:
-    """Today's self-portrait, drawn with yesterday's creature as a faint ghost
+    """Today's self-portrait, drawn with yesterday's self-image as a faint ghost
     behind it — the agent's current state, visibly grown out of the previous day.
     Deterministic in (prev, today)."""
     from .glyph import _hue_for_trust
@@ -72,8 +72,8 @@ def render_self_portrait(today: GlyphStats, prev: Optional[GlyphStats] = None,
         inner = ghost.split(">", 1)[1].rsplit("</svg>", 1)[0]
         parts.append(f'<g opacity="0.22" transform="translate({size*0.03:.1f},'
                      f'{size*0.03:.1f}) scale(0.94)" transform-origin="center">{inner}</g>')
-    creature = render_glyph(today, size=size, background=False)
-    parts.append(creature.split(">", 1)[1].rsplit("</svg>", 1)[0])
+    figure = render_glyph(today, size=size, background=False)
+    parts.append(figure.split(">", 1)[1].rsplit("</svg>", 1)[0])
     parts.append("</svg>")
     return "".join(parts)
 

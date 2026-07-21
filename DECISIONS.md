@@ -726,6 +726,37 @@ real accounts are the next step for a multi-user server. Tests: `test_auth.py`, 
 
 ---
 
+## D29 — The self-image is an abstract instrument, not a face ✅ fresh
+
+**Decision:** the agent's self-image renders as an **abstract instrument of the record** —
+concentric growth rings (age), a filled arc **gauge** (verification pass-rate), tick-segments
+(bodies of work checked), memory nodes, outward notches (unresolved triangulations), and a hue
+(trust). It has **no face** — no eyes, no mouth, no creature. The earlier glyph drew a creature
+with eyes and a mouth that **smiled when trusted and went flat when unproven**; that was
+embodiment and *performed emotion* — the very thing D3 (no soul) and the embodiment linter
+refuse, leaking back in through the picture. A deterministic smile is still a smile. Every mark
+remains a pure function of a real ledger number (same record → same image); only the
+anthropomorphic *form* is removed.
+
+**Triangulation:**
+1. Alex, 2026-07-21: *"Is it still showing an alien face for the reflection? That would be
+   incorrect."* — the correction, in his words.
+2. D3 (no soul.md; identity is an EMP, not a persona) + `emp.py`'s embodiment linter ("I can
+   see / my eyes / I feel"): a self-image that *emotes* is the same violation one layer over, in
+   pixels. The dread-lint reasoning applied to the self-portrait ("not what I feel like today")
+   was left incomplete — it corrected the animation but kept the emoting creature underneath.
+3. The founding brief's whole thesis (the agent is a trellis, not a plant; honest anatomy, never
+   performed feeling): a mascot with a data-driven smile is a mascot. The instrument is the
+   honest form.
+
+**Consequence:** `web/glyph.py` rewritten (`render_glyph` = the abstract instrument; `reflection`
+caption describes marks, not features); `web/selfportrait.py` layers the instrument (the morph
+and growth strip are unchanged in mechanism); README + VISUAL-TOUR text and assets regenerated
+(the four state images are abstract SVGs, the old face PNGs removed). Determinism, the
+same-record-same-image guarantee, and every stat→mark mapping are preserved — only the face is gone.
+
+---
+
 ## ⏳ Watch list (decisions deliberately NOT taken)
 
 - **W1 — No skill marketplace / no auto-installed skills.** [OPENCLAW] supply-chain

@@ -20,19 +20,24 @@ useful the longer they work with you. → **New here? Read [WHAT-THIS-IS.md](WHA
   <img src="https://img.shields.io/badge/license-MIT-8b949e?style=flat-square" alt="license"/>
 </p>
 
-### The agent draws itself — and the drawing is honest
+### The agent draws itself — and the drawing is honest (and has no face)
 
-Every visual property of this creature is a deterministic function of a real
-number in the agent's ledger. It's not a mascot; it's the agent's growth as a
-picture. Same record → same creature. It changes only because the record changed.
+Every mark in this self-image is a deterministic function of a real number in the
+agent's ledger. It is **not** a creature and **not** a mascot — a face that emotes
+would be the soul leaking back in through the picture (the same embodiment the
+harness refuses everywhere else). It's an **abstract instrument of the record**:
+concentric growth rings (age), a filled arc gauge (verification pass-rate),
+tick-segments (bodies of work checked), outward notches (unresolved triangulations),
+and a hue (trust). Same record → same instrument. It changes only because the
+record changed.
 
 <p align="center">
-  <img src="docs/assets/glyph-1-newborn.png" width="130" alt="newborn — pale, unproven"/>
-  &nbsp;<img src="docs/assets/glyph-2-learning.png" width="130" alt="learning"/>
-  &nbsp;<img src="docs/assets/glyph-3-trusted.png" width="130" alt="trusted — warm, calm, crested with verification"/>
-  &nbsp;<img src="docs/assets/glyph-4-wary.png" width="130" alt="wary — muted, many-eyed, flat mouth"/>
+  <img src="docs/assets/glyph-1-newborn.svg" width="130" alt="newborn — pale, empty dashed trust track, unproven"/>
+  &nbsp;<img src="docs/assets/glyph-2-learning.svg" width="130" alt="learning — the trust arc begins to fill"/>
+  &nbsp;<img src="docs/assets/glyph-3-trusted.svg" width="130" alt="trusted — warm hue, the arc gauge nearly full, rings accrued"/>
+  &nbsp;<img src="docs/assets/glyph-4-wary.svg" width="130" alt="wary — cool hue, the arc only part-filled, notches for unresolved triangulations"/>
 </p>
-<p align="center"><sub><b>newborn</b> (unproven, pale) · <b>learning</b> · <b>trusted</b> (warm, calm, crowned with verification) · <b>wary</b> (muted — pass-rate dropped; many eyes — 4 unresolved triangulations)</sub></p>
+<p align="center"><sub><b>newborn</b> (pale, empty dashed track — trust unearned) · <b>learning</b> (the arc begins to fill) · <b>trusted</b> (warm, the trust gauge nearly full, rings accrued) · <b>wary</b> (cool — pass-rate dropped; outward notches for 4 unresolved triangulations)</sub></p>
 
 And each day it draws itself **again**, building on yesterday — a deterministic
 morph over the bitemporal chain of self-image snapshots. It grows out of the

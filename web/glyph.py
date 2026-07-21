@@ -1,17 +1,22 @@
-"""glyph.py — the honest self-image. A deterministic SVG creature drawn from
-real ledger stats.
+"""glyph.py — the honest self-image. A deterministic SVG INSTRUMENT of the record.
 
-This is the reconciliation of Alex's "the agent draws itself, and it changes as
-it learns" idea with the no-soul principle (see docs/ROADMAP-UI-SPINE.md). The
-creature is NOT the agent claiming a body or a self. It is a data-visualization
-in the shape of a creature: every visual property is a pure function of a real
-ledger number, and a `reflection` string states the mapping out loud. Same
-stats → same creature, always. It changes only because the underlying record
-changed — so watching it evolve is watching real growth, not theater.
+Alex's idea: "the agent draws itself, and it changes as it learns." The earlier
+cut drew a little creature — eyes, antennae, a mouth that smiled when trusted. That
+was WRONG by the project's own founding principle (D3, the embodiment linter): a
+face that emotes is embodiment and performed feeling, the soul leaking back in
+through the picture. An honest agent has no face to smile with.
 
-The discipline (from the Tamagotchi-3.0 pattern): SEPARATE evaluation from
-rendering. `GlyphStats` is the evaluation (honest numbers). `render_glyph` is
-the rendering. Nothing in rendering invents state.
+So the self-image is an ABSTRACT INSTRUMENT — a diagram of the record's shape, not
+a being: concentric growth rings (age), a filled arc gauge (verification pass-rate),
+tick-segments (bodies of work checked), memory nodes, outward notches (unresolved
+triangulations — tension, not eyes), and a hue (trust). Every mark is a pure
+function of a real ledger number; a `reflection` string states the mapping out
+loud. Same stats → same instrument, always. It changes only because the record
+changed — real growth, no face, no feeling.
+
+The discipline: SEPARATE evaluation from rendering. `GlyphStats` is the evaluation
+(honest numbers). `render_glyph` is the rendering. Nothing in rendering invents
+state, and nothing wears a face.
 """
 
 from __future__ import annotations
@@ -66,115 +71,114 @@ def _hue_for_trust(trust: Optional[float]) -> tuple[str, str, str]:
     return hx(base), hx(accent), hx(darkbg)
 
 
+def _arc_path(cx: float, cy: float, r: float, start_deg: float, sweep_deg: float) -> str:
+    """SVG path for a circular arc — used for the trust gauge. Clamped just under a
+    full turn so a 100% arc still renders (a 360° arc has coincident endpoints)."""
+    sweep_deg = _clamp(sweep_deg, 0.0, 359.9)
+    a0 = math.radians(start_deg)
+    a1 = math.radians(start_deg + sweep_deg)
+    x0, y0 = cx + r * math.cos(a0), cy + r * math.sin(a0)
+    x1, y1 = cx + r * math.cos(a1), cy + r * math.sin(a1)
+    large = 1 if sweep_deg > 180 else 0
+    return f"M {x0:.2f} {y0:.2f} A {r:.2f} {r:.2f} 0 {large} 1 {x1:.2f} {y1:.2f}"
+
+
 def render_glyph(stats: GlyphStats, size: int = 240, background: bool = True) -> str:
-    """Return a self-contained SVG string. Deterministic in `stats`. Pass
-    background=False to omit the panel rect, so the creature can be LAYERED (a
-    self-portrait morph draws yesterday's creature faintly behind today's)."""
+    """Return a self-contained SVG string — an ABSTRACT INSTRUMENT of the record,
+    NOT a face (D3, no-soul). Deterministic in `stats`. Pass background=False to
+    omit the panel rect so the instrument can be LAYERED (the self-portrait morph
+    draws yesterday's instrument faintly behind today's)."""
     cx = cy = size / 2
-    # BODY SIZE ← total activity (log so it grows fast then settles)
-    activity = stats.entries
-    r = 0.20 * size + 0.10 * size * _clamp(math.log10(activity + 1) / 3.0, 0, 1.6)
-    r = _clamp(r, 0.18 * size, 0.36 * size)
-
     base, accent, darkbg = _hue_for_trust(stats.trust)
-
-    # CREST SPIKES ← verification rigor (how much has been checked)
-    spikes = int(_clamp(stats.checked, 0, 9))
-    # ANTENNAE ← memories (sensing feelers), capped
-    antennae = int(_clamp(1 + stats.memories // 3, 1, 4)) if stats.memories else 0
-    # EYES ← alertness from open Ts; calm(2 half-lidded) → watchful(more, wide)
-    eye_count = 2 if stats.open_ts == 0 else int(_clamp(2 + stats.open_ts, 2, 6))
-    eye_open = 0.35 if stats.open_ts == 0 else _clamp(0.5 + 0.1 * stats.open_ts, 0.5, 1.0)
-    # TAIL RINGS ← age (tree-ring style)
-    rings = int(_clamp(stats.age_days // 3, 0, 6))
+    # OUTER RADIUS ← total activity (log: grows fast, then settles)
+    R = 0.20 * size + 0.10 * size * _clamp(math.log10(stats.entries + 1) / 3.0, 0, 1.6)
+    R = _clamp(R, 0.16 * size, 0.34 * size)
 
     parts: list[str] = []
     parts.append(f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {size} {size}" '
-                 f'role="img" aria-label="trellis self-image glyph">')
+                 f'role="img" aria-label="trellis self-image — an abstract instrument of the '
+                 f'record, not a face">')
     if background:
         parts.append(f'<rect width="{size}" height="{size}" rx="18" fill="{darkbg}"/>')
 
-    # tail rings behind the body (age)
+    # AGE ← concentric growth rings (tree-ring time), one per ~3 days on the record
+    rings = int(_clamp(stats.age_days // 3, 0, 6))
     for i in range(rings):
-        ry = cy + r * 0.55 + i * (r * 0.14)
-        rr = r * (0.5 - i * 0.05)
-        op = 0.5 - i * 0.06
-        parts.append(f'<circle cx="{cx:.1f}" cy="{ry:.1f}" r="{max(rr,4):.1f}" '
-                     f'fill="none" stroke="{accent}" stroke-width="2" opacity="{op:.2f}"/>')
+        rr = R * (0.34 + 0.11 * i)
+        parts.append(f'<circle cx="{cx:.1f}" cy="{cy:.1f}" r="{rr:.1f}" fill="none" '
+                     f'stroke="{accent}" stroke-width="1.4" opacity="{max(0.40 - i*0.05, 0.12):.2f}"/>')
 
-    # crest spikes (verification rigor)
-    for i in range(spikes):
-        t = (i + 0.5) / max(spikes, 1)
-        ang = math.pi * (0.15 + 0.7 * t)   # across the top
-        sx = cx - r * math.cos(ang)
-        sy = cy - r * math.sin(ang)
-        tipx = cx - (r + r * 0.28) * math.cos(ang)
-        tipy = cy - (r + r * 0.28) * math.sin(ang)
-        parts.append(f'<path d="M {sx-6:.1f} {sy:.1f} L {tipx:.1f} {tipy:.1f} '
-                     f'L {sx+6:.1f} {sy:.1f} Z" fill="{accent}" opacity="0.9"/>')
+    # MEMORIES ← nodes on an inner ring (held beside the agent)
+    mem = int(_clamp(stats.memories, 0, 8))
+    for i in range(mem):
+        ang = 2 * math.pi * i / max(mem, 1) - math.pi / 2
+        px, py = cx + R * 0.30 * math.cos(ang), cy + R * 0.30 * math.sin(ang)
+        parts.append(f'<circle cx="{px:.1f}" cy="{py:.1f}" r="2.6" fill="{accent}" opacity="0.85"/>')
 
-    # antennae (memories)
-    for i in range(antennae):
-        off = (i - (antennae - 1) / 2) * 14
-        ax = cx + off
-        parts.append(f'<line x1="{ax:.1f}" y1="{cy - r*0.9:.1f}" x2="{ax:.1f}" '
-                     f'y2="{cy - r*1.25:.1f}" stroke="{accent}" stroke-width="2.5"/>')
-        parts.append(f'<circle cx="{ax:.1f}" cy="{cy - r*1.28:.1f}" r="4" fill="{base}" '
-                     f'stroke="{accent}" stroke-width="1.5"/>')
+    # VERIFICATION RIGOR ← tick-segments around a mid ring (bodies of work checked)
+    checked = int(_clamp(stats.checked, 0, 12))
+    for i in range(checked):
+        ang = 2 * math.pi * i / max(checked, 1) - math.pi / 2
+        x0, y0 = cx + R * 0.66 * math.cos(ang), cy + R * 0.66 * math.sin(ang)
+        x1, y1 = cx + R * 0.78 * math.cos(ang), cy + R * 0.78 * math.sin(ang)
+        parts.append(f'<line x1="{x0:.1f}" y1="{y0:.1f}" x2="{x1:.1f}" y2="{y1:.1f}" '
+                     f'stroke="{accent}" stroke-width="2" opacity="0.9"/>')
 
-    # body
-    parts.append(f'<circle cx="{cx:.1f}" cy="{cy:.1f}" r="{r:.1f}" fill="{base}" '
-                 f'stroke="{accent}" stroke-width="3"/>')
-
-    # eyes (alertness)
-    eye_r = _clamp(r * 0.13, 5, 16)
-    spread = r * 0.44
-    if eye_count <= 2:
-        xs = [cx - spread, cx + spread]
+    # TRUST ← a filled ARC GAUGE around the perimeter (verification pass-rate).
+    # This is the replacement for the old smiling mouth: a gauge, not an expression.
+    track_r = R * 0.92
+    if stats.trust is None:
+        parts.append(f'<circle cx="{cx:.1f}" cy="{cy:.1f}" r="{track_r:.1f}" fill="none" '
+                     f'stroke="{accent}" stroke-width="3" stroke-dasharray="3 5" opacity="0.5"/>')
     else:
-        xs = [cx + (i - (eye_count - 1) / 2) * (spread * 1.4 / max(eye_count - 1, 1))
-              for i in range(eye_count)]
-    ey = cy - r * 0.08
-    for ex in xs:
-        parts.append(f'<ellipse cx="{ex:.1f}" cy="{ey:.1f}" rx="{eye_r:.1f}" '
-                     f'ry="{eye_r*eye_open:.1f}" fill="#0d1117"/>')
-        parts.append(f'<circle cx="{ex:.1f}" cy="{ey - eye_r*0.15:.1f}" '
-                     f'r="{eye_r*0.32:.1f}" fill="#ffffff" opacity="0.9"/>')
+        parts.append(f'<circle cx="{cx:.1f}" cy="{cy:.1f}" r="{track_r:.1f}" fill="none" '
+                     f'stroke="{accent}" stroke-width="3" opacity="0.18"/>')
+        frac = _clamp(stats.trust, 0, 1)
+        if frac > 0:
+            parts.append(f'<path d="{_arc_path(cx, cy, track_r, -90, frac * 360)}" fill="none" '
+                         f'stroke="{accent}" stroke-width="5" stroke-linecap="round"/>')
 
-    # a small mouth: content curve if trusted, flat if wary/unchecked
-    mood = 0.0 if stats.trust is None else (stats.trust - 0.5)
-    my = cy + r * 0.42
-    curve = mood * r * 0.25
-    parts.append(f'<path d="M {cx - r*0.22:.1f} {my:.1f} Q {cx:.1f} {my + curve:.1f} '
-                 f'{cx + r*0.22:.1f} {my:.1f}" fill="none" stroke="#0d1117" '
-                 f'stroke-width="2.5" stroke-linecap="round"/>')
+    # OPEN TRIANGULATIONS ← notches pointing OUTWARD beyond the ring — unresolved
+    # tension made visible. NOT eyes: the instrument does not watch, it registers.
+    open_ts = int(_clamp(stats.open_ts, 0, 8))
+    for i in range(open_ts):
+        ang = -math.pi / 2 + (i - (open_ts - 1) / 2) * 0.5
+        x0, y0 = cx + R * 0.98 * math.cos(ang), cy + R * 0.98 * math.sin(ang)
+        x1, y1 = cx + R * 1.16 * math.cos(ang), cy + R * 1.16 * math.sin(ang)
+        parts.append(f'<line x1="{x0:.1f}" y1="{y0:.1f}" x2="{x1:.1f}" y2="{y1:.1f}" '
+                     f'stroke="{accent}" stroke-width="2.5" opacity="0.9"/>')
 
+    # the record's CORE ← a filled disc, hue = trust (pale when unproven)
+    parts.append(f'<circle cx="{cx:.1f}" cy="{cy:.1f}" r="{R*0.20:.1f}" fill="{base}" '
+                 f'stroke="{accent}" stroke-width="2"/>')
     parts.append('</svg>')
     return "".join(parts)
 
 
 def reflection(stats: GlyphStats) -> list[str]:
-    """The honesty caption: WHY it looks the way it does. Every line ties a
-    visual trait to a real number, so the picture is auditable."""
+    """The honesty caption: WHY it looks the way it does. Every line ties an
+    abstract mark to a real number — no face, no feeling, auditable."""
     lines = []
     lines.append(f"size: grown from {stats.entries} recorded events")
     if stats.trust is None:
-        lines.append("colour: pale — no work has been independently checked yet, "
-                     "so trust is unearned (not low, unproven)")
+        lines.append("hue + gauge: pale, and the outer arc is an empty dashed track — "
+                     "no work has been independently checked yet, so trust is unearned "
+                     "(not low, unproven)")
     else:
-        warmth = "warm/green" if stats.trust >= 0.66 else \
-                 "muted" if stats.trust >= 0.4 else "wary/grey"
-        lines.append(f"colour: {warmth} — verification pass-rate is "
-                     f"{int(stats.trust*100)}% ({stats.verified}/{stats.checked} checked)")
-    lines.append(f"crest: {int(_clamp(stats.checked,0,9))} spikes — one per body of "
-                 "work put through verification")
-    lines.append(f"antennae: sensing {stats.memories} memories held beside it")
+        warmth = "warm" if stats.trust >= 0.66 else "muted" if stats.trust >= 0.4 else "cool/grey"
+        lines.append(f"hue + trust gauge: {warmth}; the outer arc is filled to "
+                     f"{int(stats.trust*100)}% — the verification pass-rate "
+                     f"({stats.verified}/{stats.checked} checked)")
+    lines.append(f"verification ticks: {int(_clamp(stats.checked,0,12))} — one segment per "
+                 "body of work put through an independent check")
+    lines.append(f"memory nodes: {stats.memories} memories held beside it")
     if stats.open_ts == 0:
-        lines.append("eyes: calm, half-lidded — no unresolved triangulations")
+        lines.append("outer notches: none — no unresolved 'triangulate' decisions")
     else:
-        lines.append(f"eyes: {int(_clamp(2+stats.open_ts,2,6))}, wide — watching "
-                     f"{stats.open_ts} unresolved 'triangulate' decision(s)")
-    lines.append(f"tail rings: {int(_clamp(stats.age_days//3,0,6))} — one per ~3 days "
-                 f"of accumulated life ({stats.age_days:.0f}d on the record)")
-    lines.append("mouth: curves with trust; flat when unproven")
+        lines.append(f"outer notches: {stats.open_ts} — unresolved 'triangulate' decision(s), "
+                     "tension pointing outward")
+    lines.append(f"growth rings: {int(_clamp(stats.age_days//3,0,6))} — one per ~3 days "
+                 f"on the record ({stats.age_days:.0f}d)")
+    lines.append("It is an abstract instrument of the record — no face, no feeling; "
+                 "every mark is a real number.")
     return lines

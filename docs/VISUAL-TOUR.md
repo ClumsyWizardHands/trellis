@@ -382,12 +382,15 @@ flowchart TB
 
 ---
 
-## 12. The self-image glyph — an honest data-viz that wears a face
+## 12. The self-image — an abstract instrument of the record, not a face
 
-Alex's idea: *the agent draws itself, and the drawing changes as it learns.*
-Reconciled with the no-soul principle: **every visual property is a deterministic
-function of a real ledger number.** The creature isn't a claimed self — it's the
-EMP made visible. It changes only because the record changed.
+Alex's idea: *the agent draws itself, and the drawing changes as it learns.* The
+first cut drew a little creature with eyes and a mouth that smiled when trusted —
+and that was **wrong by the project's own founding principle** (D3, the embodiment
+linter): a face that emotes is embodiment and performed feeling, the soul leaking
+back in through the picture (correction: DECISIONS **D29**). So the self-image is an
+**abstract instrument** — **every mark a deterministic function of a real ledger
+number**, no face, no feeling. It changes only because the record changed.
 
 ```mermaid
 flowchart LR
@@ -399,13 +402,13 @@ flowchart LR
         E["open triangulations"]
         F["days on the record"]
     end
-    subgraph GLYPH["the creature (rendering)"]
-        A2["body size"]
-        B2["colour warmth"]
-        C2["crest spikes"]
-        D2["antennae"]
-        E2["eyes — alertness"]
-        F2["tail rings"]
+    subgraph GLYPH["the instrument (rendering)"]
+        A2["outer radius"]
+        B2["hue + filled arc GAUGE"]
+        C2["tick-segments"]
+        D2["memory nodes"]
+        E2["outward notches — tension, not eyes"]
+        F2["concentric growth rings"]
     end
     A --> A2
     B --> B2
@@ -415,19 +418,20 @@ flowchart LR
     F --> F2
 ```
 
-The same agent, growing up — newborn (unproven, pale) → learning → trusted
-(warm, calm, crowned with verification) — and, on the right, *wary*: muted colour
-because its pass-rate dropped, many wide eyes because four triangulations are
-unresolved.
+The same agent, growing up — newborn (unproven; a pale, empty dashed trust track) →
+learning (the arc begins to fill) → trusted (warm hue, the gauge nearly full, rings
+accrued) — and, on the right, *wary*: cool hue because the pass-rate dropped, four
+outward notches because four triangulations are unresolved. No smile, no frown — a
+gauge and some marks.
 
 <p align="center">
-  <img src="assets/glyph-1-newborn.png" width="150" alt="newborn: pale, unproven"/>
-  <img src="assets/glyph-2-learning.png" width="150" alt="learning"/>
-  <img src="assets/glyph-3-trusted.png" width="150" alt="trusted: warm, calm, crested"/>
-  <img src="assets/glyph-4-wary.png" width="150" alt="wary: muted, many-eyed, flat mouth"/>
+  <img src="assets/glyph-1-newborn.svg" width="150" alt="newborn: pale, empty dashed trust track"/>
+  <img src="assets/glyph-2-learning.svg" width="150" alt="learning: the trust arc begins to fill"/>
+  <img src="assets/glyph-3-trusted.svg" width="150" alt="trusted: warm, the arc gauge nearly full"/>
+  <img src="assets/glyph-4-wary.svg" width="150" alt="wary: cool, part-filled arc, notches for open triangulations"/>
 </p>
 
-<p align="center"><i>newborn · learning · trusted · wary — the same creature, driven by the record</i></p>
+<p align="center"><i>newborn · learning · trusted · wary — the same instrument, driven by the record</i></p>
 
 ---
 
