@@ -44,9 +44,11 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Optional
 
+from .identity import same_identity
 from .ledger import Ledger
 from .verify import (Check, CompletionClaim, ModelVerifier, RuleVerifier,
-                     Verdict, VerdictStatus, record_verdict)
+                     SelfCertificationError, Verdict, VerdictStatus,
+                     record_verdict)
 
 DEFAULT_LENSES = ("correctness", "freshness", "attribution", "reproduce")
 
@@ -60,10 +62,26 @@ class PanelVerdict:
     verified_count: int
     refuted_count: int
     rationale: str
+    verifier: str = ""               # the panel's id — so a PanelVerdict IS a Verdict
 
     @property
     def confirmed(self) -> bool:
         return self.status == VerdictStatus.VERIFIED
+
+    # --- Verdict-protocol surface (FableG5a) ---------------------------------
+    # record_verdict() and the Verdict protocol read .verifier/.status/.checks/
+    # .note. A PanelVerdict must expose all four or wiring the panel into a
+    # documented seat crashes with AttributeError. `note` is the rationale;
+    # `checks` is one synthesized Check per lens so the panel records like any
+    # other verdict without losing per-lens detail.
+    @property
+    def note(self) -> str:
+        return self.rationale
+
+    @property
+    def checks(self) -> list[Check]:
+        return [Check(f"lens {v.verifier}", v.status == VerdictStatus.VERIFIED,
+                      v.status.value) for v in self.lens_verdicts]
 
 
 class VerifierPanel:
@@ -80,9 +98,31 @@ class VerifierPanel:
         rule_verifier: Optional[RuleVerifier] = None,
     ):
         self.id = panel_id
+        # unique, non-empty lenses (Codex#13 / FableL3b): a panel of
+        # ("correctness","correctness") is one verifier with a louder voice, and
+        # an empty panel manufactures quorum from nothing. Diversity, not
+        # redundancy — refuse both loudly rather than confirm on redundancy.
+        if not lenses:
+            raise ValueError("a panel needs at least one lens — an empty panel "
+                             "manufactures quorum from nothing")
+        seen: list[str] = []
+        for lens in lenses:
+            if not lens or not lens.strip():
+                raise ValueError("lens names must be non-empty")
+            if lens in seen:
+                raise ValueError(f"duplicate lens {lens!r} — lenses must be unique "
+                                 "(diversity, not redundancy)")
+            seen.append(lens)
         self.lenses = lenses
-        # default quorum = strict majority of lenses
-        self.quorum = quorum or (len(lenses) // 2 + 1)
+        # default quorum = strict majority; an explicit quorum must be a real
+        # threshold in [1, len(lenses)]. `quorum or default` silently kept a
+        # negative (truthy) quorum so an all-INSUFFICIENT panel passed — reject
+        # out-of-range loudly instead.
+        n = len(lenses)
+        self.quorum = quorum if quorum is not None else (n // 2 + 1)
+        if not (1 <= self.quorum <= n):
+            raise ValueError(f"quorum {self.quorum} out of range — must be 1..{n} "
+                             f"for a panel of {n} lens(es)")
         self.ledger = ledger
         self.rule_verifier = rule_verifier
         # each lens is its OWN identity, so none can self-certify the maker
@@ -92,6 +132,13 @@ class VerifierPanel:
         ]
 
     def verify(self, claim: CompletionClaim, record: bool = True) -> PanelVerdict:
+        # the panel as a whole must not be the maker (FableG5a): the per-lens ids
+        # are namespaced under the panel, so a maker-named panel slipped past the
+        # per-lens self-cert guard. A self-audit is not an audit, at any layer.
+        if same_identity(claim.maker, self.id):
+            raise SelfCertificationError(
+                f"{claim.maker!r} cannot convene a panel to verify its own claim "
+                f"{claim.id} — the panel id equals the maker. Use a distinct panel id.")
         lens_verdicts: list[Verdict] = []
 
         # Floor first: deterministic checks, no model cost. A refuted floor
@@ -105,7 +152,8 @@ class VerifierPanel:
                     claim_id=claim.id, status=VerdictStatus.REFUTED,
                     lens_verdicts=lens_verdicts, quorum=self.quorum,
                     verified_count=0, refuted_count=1,
-                    rationale="deterministic floor refuted the claim; panel not consulted")
+                    rationale="deterministic floor refuted the claim; panel not consulted",
+                    verifier=self.id)
                 if record and self.ledger is not None:
                     self._record(claim, pv)
                 return pv
@@ -132,7 +180,7 @@ class VerifierPanel:
         pv = PanelVerdict(
             claim_id=claim.id, status=status, lens_verdicts=lens_verdicts,
             quorum=self.quorum, verified_count=verified, refuted_count=refuted,
-            rationale=rationale)
+            rationale=rationale, verifier=self.id)
         if record and self.ledger is not None:
             self._record(claim, pv)
         return pv

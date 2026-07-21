@@ -141,6 +141,11 @@ def _guard_independence(claim: CompletionClaim, verifier_id: str) -> None:
             "ideally a different, cheaper model with fresh context).")
 
 
+# The maker's own run bookkeeping — a predicate against these confirms only that
+# the maker labelled its own run, never an outcome (D25 / Codex#7 / FableG5b V3).
+_LOOP_BOOKKEEPING_KINDS = frozenset({"loop_run_start", "loop_run_end"})
+
+
 class RuleVerifier:
     """Deterministic checks — the floor. No model, no cost, no mood."""
 
@@ -189,18 +194,28 @@ class RuleVerifier:
                     found = entry is not None
                     checks.append(Check(f"ledger entry exists: {ev.ref}", found,
                                         "" if found else "no such ledger entry"))
+                    # A predicate that resolves against the MAKER's OWN loop
+                    # bookkeeping (loop_run_start/end) is not an OUTCOME — it is
+                    # the maker vouching for its own run label, the same laundering
+                    # D25/Codex#7 close on the recency path (FableG5b V3). Such a
+                    # predicate stays a PRECONDITION: it can still refute, but it
+                    # never earns VERIFIED. A predicate against any other entry
+                    # (a work-product the maker or another party appended) counts.
+                    is_bookkeeping = found and entry.kind in _LOOP_BOOKKEEPING_KINDS
                     if found and ev.expect_kind is not None:
                         ok = entry.kind == ev.expect_kind
                         checks.append(Check(f"ledger entry is a {ev.expect_kind}: {ev.ref}", ok,
                                             "" if ok else f"entry is a {entry.kind}, not a {ev.expect_kind}"))
-                        outcome_checks += 1
+                        if not is_bookkeeping:
+                            outcome_checks += 1
                     if found and ev.expect_contains is not None:
                         import json as _json
                         blob = _json.dumps(entry.body, ensure_ascii=False, default=str)
                         ok = ev.expect_contains in blob
                         checks.append(Check(f"ledger entry contains expected content: {ev.ref}", ok,
                                             "" if ok else f"'{ev.expect_contains[:40]}' not in the entry body"))
-                        outcome_checks += 1
+                        if not is_bookkeeping:
+                            outcome_checks += 1
             elif ev.kind == EvidenceKind.OUTPUT:
                 ok = bool(ev.ref.strip())
                 checks.append(Check("output evidence non-empty", ok))
@@ -215,8 +230,14 @@ class RuleVerifier:
                                     "weakest class; unconfirmable, not counted as an outcome"))
                 external_only_unopenable += 1
 
-        # time sanity: a claim about work done "now" whose loop run is ancient. A
-        # passing recency/outcome check IS an outcome check (it confirms the run).
+        # time sanity: a claim about work done "now" whose loop run is ancient.
+        # These are PROVENANCE / PRECONDITION checks, NOT outcome checks (D25):
+        # the recency and the "outcome is ok" label are authored by the MAKER's
+        # own run.ok() (loops.py record_end author=run.actor), so counting them
+        # as outcome checks let a maker launder existence-only evidence into
+        # VERIFIED (Codex#7 / FableG5b). They can still REFUTE (a missing or
+        # stale run is a hard failure), but they never EARN VERIFIED — only a
+        # predicate tied to the claimed artifact/result does.
         if claim.loop_run_id and self.ledger is not None:
             runs = [e for e in self.ledger.entries()
                     if e.kind == "loop_run_end"
@@ -232,7 +253,8 @@ class RuleVerifier:
                 checks.append(Check("loop run recency", recency_ok, f"run concluded {age} ago"))
                 checks.append(Check("loop outcome is ok", outcome_ok,
                                     f"outcome was {runs[-1].body.get('outcome')}"))
-                outcome_checks += 2
+                # NOTE: deliberately NOT `outcome_checks += 2` — the maker's own
+                # loop label is provenance, not an independently checked outcome.
 
         hard = [c for c in checks if not c.passed]   # real failures (external is noted, not failed)
         real_evidence = len(claim.evidence) - external_only_unopenable
