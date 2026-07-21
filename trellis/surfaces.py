@@ -17,10 +17,17 @@ from __future__ import annotations
 
 import uuid
 from dataclasses import dataclass
+from datetime import datetime, timedelta
 from enum import Enum
 from typing import Optional
 
+from .auth import Principal
 from .ledger import Ledger
+
+#: How long a declassification token stays usable. A declassification is a
+#: deliberate human act to move ONE excerpt across the boundary; the token is
+#: not a standing permission, so it expires. (Policy default — see decisions.)
+DEFAULT_DECLASSIFY_TTL = timedelta(hours=1)
 
 
 class Surface(str, Enum):
@@ -65,22 +72,35 @@ class ConversationKey:
 
     def storage_key(self) -> str:
         """Filesystem/session-safe key, INJECTIVELY encoded. Distinct tuples can
-        never collide into one key — the user_id-only conflation is
-        unrepresentable, and (Codex High 7) a `__` INSIDE a field can no longer
-        masquerade as the delimiter. Each field escapes `%` then `_`, so the only
-        `__` in the result is a real delimiter — the encoding is reversible and
-        one-to-one. Example that used to collide, now distinct:
-          scope='s',   thread='a__b'  → …__s__a%5F%5Fb__…
-          scope='s__a', thread='b'    → …__s%5F%5Fa__b__…"""
+        never collide into one key.
+
+        Two properties make the encoding one-to-one:
+          * (Codex High 7) each field escapes `%` then `_`, so no field contains a
+            `_` — the only `__` in the result are the fixed delimiters, and a `__`
+            INSIDE a field can never masquerade as one.
+          * (Codex High 6) optionality is encoded EXPLICITLY, never by
+            substituting a legal value. `"-"` used to be BOTH the missing-value
+            sentinel and legal field data, so `human=""` collided with
+            `human="-"`, and `thread=None` collided with `ThreadRef(id="-")` —
+            a cross-conversation memory-merge risk. Now the thread carries a
+            present/absent FLAG and all three of its parts are their own tokens,
+            and `human` is emitted verbatim (empty is its own distinct token), so
+            those inputs map to distinct keys. The whole ThreadRef is in the key,
+            so the same thread id under a different parent no longer conflates."""
         def esc(s: str) -> str:
             # percent-escape everything unsafe (incl. '/'), then '_' — so the
             # result is filesystem-safe AND contains no '_', making the '__'
             # delimiter unambiguous (one-to-one).
             from urllib.parse import quote
             return quote(s or "", safe="").replace("_", "%5F")
-        t = self.thread.id if self.thread else "-"
-        return "__".join(esc(f) for f in
-                         (self.agent, self.surface.value, self.scope, t, self.human or "-"))
+        if self.thread is not None:
+            thread_tokens = ("1", esc(self.thread.id), esc(self.thread.parent_channel),
+                             esc(self.thread.parent_message or ""))
+        else:
+            thread_tokens = ("0", "", "", "")
+        fields = (esc(self.agent), esc(self.surface.value), esc(self.scope),
+                  *thread_tokens, esc(self.human))
+        return "__".join(fields)
 
     def privacy_rank(self) -> int:
         return _PRIVACY_RANK[self.surface]
@@ -109,23 +129,64 @@ def guard_flow(src: ConversationKey, dst: ConversationKey) -> None:
             "declassification by a human (see declassify)")
 
 
+def _require_human_authority(approver: Principal) -> str:
+    """Return the AUTHENTICATED human's canonical id, or refuse (fail-closed).
+
+    Codex Critical #4: `approved_by` used to be an unauthenticated string, so any
+    agent could mint a DM→public token merely by naming itself
+    (`approved_by="witness-agent"`). Declassification is a HUMAN-only authority.
+    surfaces.py is stdlib-only and cannot itself authenticate, so it requires an
+    object carrying a VERIFIED principal from the trusted boundary (auth.Principal
+    with `authenticated=True`, which only an Authenticator that verified a secret
+    can mint). A bare identity string — an agent naming itself — has no
+    `.authenticated`, so it is STRUCTURALLY refused, not reasoned about."""
+    if isinstance(approver, (str, bytes)):
+        raise PrivacyBoundaryError(
+            "declassification requires an AUTHENTICATED human principal, not a "
+            "caller-supplied name — an agent cannot authorize declassification")
+    if getattr(approver, "authenticated", False) is not True:
+        raise PrivacyBoundaryError(
+            "declassification requires an authenticated human principal "
+            "(an unauthenticated or self-asserted identity is refused)")
+    pid = getattr(approver, "id", None)
+    if not isinstance(pid, str) or not pid.strip():
+        raise PrivacyBoundaryError("authenticated principal carries no usable id")
+    return pid.strip()
+
+
 def declassify(ledger: Ledger, src: ConversationKey, dst: ConversationKey,
-               approved_by: str, reason: str) -> str:
+               approver: Principal, reason: str, *,
+               ttl: timedelta = DEFAULT_DECLASSIFY_TTL) -> str:
     """A human explicitly moves something across the privacy boundary.
-    The act is a ledger event — auditable forever. Agents cannot call this
-    on their own authority; `approved_by` must name a human."""
-    if not approved_by.strip():
-        raise PrivacyBoundaryError("declassification requires a named human approver")
+    The act is a ledger event — auditable forever. Agents cannot call this on
+    their own authority; `approver` must be an authenticated human principal.
+
+    The token is DECLASSIFYING-only, EXPIRING, and SINGLE-USE (FableL2):
+      * DIRECTION — the only legitimate crossing is toward a strictly MORE PUBLIC
+        surface. Any equal-or-more-private target is refused: `can_flow` already
+        permits that path, so calling declassify for it is a category error and a
+        would-be over-broad grant.
+      * EXPIRY — the token carries `expires_at` from the injected ledger clock
+        (never a naked now()); it is a one-shot act, not a standing permission.
+      * SINGLE-USE — enforced at redemption in `flow_with_token`."""
+    approver_id = _require_human_authority(approver)
     if not reason.strip():
         raise PrivacyBoundaryError("declassification requires a stated reason")
+    if dst.privacy_rank() >= src.privacy_rank():
+        raise PrivacyBoundaryError(
+            f"declassification only crosses toward a strictly MORE PUBLIC surface; "
+            f"{src.surface.value} → {dst.surface.value} does not declassify "
+            "(that path, if legitimate, needs no token — see can_flow)")
+    now = ledger.ground.now()
     entry = ledger.append(
         kind="declassification",
-        author=approved_by,
+        author=approver_id,
         body={
             "from": src.storage_key(),
             "to": dst.storage_key(),
             "reason": reason,
             "token": uuid.uuid4().hex[:12],
+            "expires_at": (now + ttl).isoformat(),
         },
         tags=("privacy", src.surface.value, dst.surface.value),
     )
@@ -134,10 +195,30 @@ def declassify(ledger: Ledger, src: ConversationKey, dst: ConversationKey,
 
 def flow_with_token(ledger: Ledger, src: ConversationKey, dst: ConversationKey,
                     token: str) -> bool:
-    """Check a declassification token covers this flow."""
+    """Redeem a declassification token for THIS exact flow. Returns True at most
+    once per token (single-use): a match that is unexpired and not already spent
+    records a `declassification_use` event and returns True; every later call —
+    reused token, expired token, or wrong src/dst — returns False. No silent
+    reuse, no infinite lifetime (FableL2)."""
+    src_key, dst_key = src.storage_key(), dst.storage_key()
+    now = ledger.ground.now()
+    spent = {e.body.get("token") for e in ledger.entries()
+             if e.kind == "declassification_use"}
     for e in ledger.current("declassification"):
-        if (e.body.get("token") == token
-                and e.body.get("from") == src.storage_key()
-                and e.body.get("to") == dst.storage_key()):
-            return True
+        b = e.body
+        if not (b.get("token") == token
+                and b.get("from") == src_key and b.get("to") == dst_key):
+            continue
+        if token in spent:
+            return False                                # already redeemed once
+        expires_at = b.get("expires_at")
+        if expires_at is not None and now >= datetime.fromisoformat(expires_at):
+            return False                                # expired — re-declassify
+        ledger.append(
+            kind="declassification_use",
+            author=e.author,        # the human whose act this consumes
+            body={"token": token, "from": src_key, "to": dst_key},
+            tags=("privacy", src.surface.value, dst.surface.value),
+        )
+        return True
     return False

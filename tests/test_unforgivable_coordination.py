@@ -6,6 +6,7 @@ from datetime import timedelta
 
 import pytest
 
+from trellis.auth import Principal
 from trellis.passes import (Pass, PassExchange, PassStatus, TurdDropError)
 from trellis.stage import (ActionStatus, Outbox, StagedAction, UnapprovedFireError)
 from trellis.surfaces import (ConversationKey, PrivacyBoundaryError, Surface,
@@ -94,14 +95,26 @@ def test_dms_of_different_humans_never_cross():
     assert can_flow(_key(Surface.DM, human="sarah"), _key(Surface.DM, human="brett")) is False
 
 
-def test_declassification_requires_named_human_and_reason(ledger):
+def test_declassification_requires_authenticated_human_and_reason(ledger):
     dm, ch = _key(Surface.DM, human="sarah"), _key(Surface.CHANNEL, human="")
-    with pytest.raises(PrivacyBoundaryError, match="named human"):
-        declassify(ledger, dm, ch, approved_by=" ", reason="ok to share")
-    token = declassify(ledger, dm, ch, approved_by="sarah",
+    sarah = Principal(id="sarah", authenticated=True)
+    # An agent naming itself — a bare string — is STRUCTURALLY refused (Codex #4):
+    # declassification is a human-only authority, not a caller-supplied name.
+    with pytest.raises(PrivacyBoundaryError, match="AUTHENTICATED human principal"):
+        declassify(ledger, dm, ch, "witness-agent", reason="ok to share")
+    # An unauthenticated principal (self-asserted, no verified secret) is refused too.
+    with pytest.raises(PrivacyBoundaryError, match="authenticated"):
+        declassify(ledger, dm, ch, Principal(id="sarah"), reason="ok to share")
+    # A reason is still mandatory, even for an authenticated human.
+    with pytest.raises(PrivacyBoundaryError, match="reason"):
+        declassify(ledger, dm, ch, sarah, reason="  ")
+    token = declassify(ledger, dm, ch, sarah,
                        reason="sarah asked for this excerpt to be posted")
-    assert flow_with_token(ledger, dm, ch, token) is True
+    # DM → CHANNEL is a real declassification (toward more public); the token
+    # redeems exactly once (SINGLE-USE), and never for a different flow.
     assert flow_with_token(ledger, dm, _key(Surface.CHANNEL, scope="other"), token) is False
+    assert flow_with_token(ledger, dm, ch, token) is True
+    assert flow_with_token(ledger, dm, ch, token) is False   # spent — one-shot, not standing
 
 
 def test_thread_is_modeled_with_parent(ledger):
