@@ -1,3 +1,11 @@
+> **RATIFIED 2026-07-21.** All eight were decided by Alex and are now recorded in
+> `DECISIONS.md` (D31–D38) — the canonical entries capture his answers, including the
+> three that modified the recommendation below (D32: DMs are IN with session-tracking;
+> D33: less gating — the agent may change its own mind, logged, escalating only sometimes;
+> D38: ship everything at once to a private server). This memo is kept as the reasoning
+> record. One flag remains open: whether outbound sends stay human-approved (default) or
+> go autonomous — see D38.
+
 # Decision memo — D31–D38 (the go-live blockers only Alex can decide)
 
 **From:** Fable (lead auditor)

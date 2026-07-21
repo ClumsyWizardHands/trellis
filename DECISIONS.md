@@ -790,6 +790,210 @@ the executor stays behind an explicit human "arm it" (W3 still stands).
 
 ---
 
+## D31 — Live Discord rides the idempotent Ingestor, not the raw append path ✅ fresh
+
+**Decision:** a live Discord message enters through a `DiscordMessage → RawItem` bridge into
+`sources.Ingestor` (D19: identity-key dedup, content-hash corrections, two-phase markers), NOT
+through the dedup-less `ingest_discord`. `item_id = message_id`; the `ConversationKey` and the
+D30 allowlist are carried through the bridge. One idempotency contract, one provenance model.
+
+**Triangulation:**
+1. Alex, 2026-07-21: ratified option A ("bridge Discord onto the Ingestor").
+2. The audit repro: the documented setup wired the poller to `ingest_scoped_discord`, so poll #2
+   double-wrote every message and `position_history` rendered a false "view shifted" — the record
+   getting *less* trustworthy the longer it runs, the thesis inverted (Fable audit R1).
+3. D19 (idempotent by identity + markers) was ratified for Atlas dumps; this extends it to the
+   live surface rather than duplicating the machinery.
+
+**Consequence (Phase 2 build):** the bridge + allowlist threading; a re-poll-is-a-noop
+regression on the Discord path. Resolves the D19-vs-SETUP contradiction the audit flagged.
+
+---
+
+## D32 — Channel implies its threads; DMs are IN, scoped and session-tracked ✅ fresh
+
+**Decision:** an allowlisted channel implies its threads (a threaded message is readable if its
+`parent_channel` is allowlisted; dropped messages are counted, never silently discarded). **DMs
+ARE admitted** — but a DM stays private to the human it is with; it never flows to a channel.
+This requires a **session-tracking** layer: a stable capture of **username + a stable ID + the
+per-conversation thread**, so DM conversations are individuated and legible. It must be visible
+in the portal (a session log: "these are the DM sessions, this is who, this is what was said").
+
+**Triangulation:**
+1. Alex, 2026-07-21: ratified channel⇒threads (A); overrode "DMs out for v1" — DMs are in, but
+   "they stay private to whoever the DM is speaking with… a saving process of Username, ID, and
+   tracking of those conversations… if this is not in the UI (session tracking) it needs to be."
+2. The audit: threaded messages were silently dropped (dynamic thread ids, no parent fallback)
+   and DM `ConversationKey.human` split one conversation per speaker (Fable G4/G11); this decision
+   closes both, and the stable-ID capture also fixes the "attribution has no stable identity" gap.
+3. D7 privacy lattice (DM most-private): admitting DMs is safe only with the scoping + the
+   cross-surface leak checkpoints of [[D36]].
+
+**Consequence (Phase 2/3 build):** an identity registry (Discord user-id → canonical id), a
+session model keyed on (agent, surface, human, thread) surfaced as a portal **session log**, the
+parent-channel thread fallback, and a dropped-per-surface counter. *Open design to triangulate:
+the exact session-tracking shape + UI — Alex called for it explicitly.*
+
+---
+
+## D33 — The agent may change its own mind; it logs it, and only sometimes escalates ✅ fresh
+
+**Decision:** the Witness may revise its own opinion, reopen a question, reflect, and re-decide
+**on its own authority** — every such change is a logged, visible supersession on the record (the
+portal shows the change and its rationale), and an independent cheap verifier ([[D34]]) checks it.
+A human is NOT in the loop for the agent thinking. Escalation to a human is the **exception**,
+reserved for a defined high-stakes class (e.g. reversing something a human ratified/affirmed) and
+for verifier **refutation** ([[D35]]). The Phase-1 collision fix (block + require a human reopen)
+is an interim stopgap, NOT the design; the design is autonomous-supersede-with-log + machine
+verification.
+
+**Triangulation:**
+1. Alex, 2026-07-21: "I don't want too much of a gating function… the beautiful thing about this
+   agent is learning over time: the reasoning, the reflection, the tracking of decisions, the
+   learning. I think it takes away from that if… all of those things are gated by a human… there
+   are times when we should always log that [a changed mind]… times when maybe we need to
+   escalate. There needs to be room for making decisions like that." Explicit caution against the
+   audit-fix over-correcting into lost agency.
+2. The audit found the agent could not legally change its mind at all (a repeat opinion crashed
+   the driver; the supersession grammar had zero callers) — the failure this decision's build
+   closes, on the agency-preserving side rather than the human-gated side.
+3. D14 (memory is navigation: WALK/REOPEN/DECIDE) + D1 (the atomic record is the Y/N/T with
+   lineage): reopening and superseding are first-class, recorded acts — that IS the learning.
+
+**Consequence (Phase 2 build):** route opinion-recording through `Navigator.decide()` with
+autonomous reopen+supersede, each logged and portal-visible and machine-verified; a named,
+minimal high-stakes class that escalates to the human. Do NOT gate ordinary reasoning/revision.
+
+---
+
+## D34 — Same family, cheaper seat: Opus makes, Haiku verifies — and verifies broadly ✅ fresh
+
+**Decision:** the verifier is a **separate, cheaper seat in the same family** — Opus-class maker,
+Haiku-class verifier (`TRELLIS_VERIFIER_*`; the factory refuses loud if it equals the maker).
+Verification is **broad, not high-stakes-only**: everything logged to memory — decision trees,
+reflections, and load-bearing claims — is independently verified, because an unverified memory
+error compounds (≈2%→4%→16%) and that quiet compounding is precisely how agents fail over time.
+The verifier may independently reach for evidence the maker cannot. VERIFIED still requires a real
+outcome predicate ([[D25]]); the model verifier refutes/confirms but never mints VERIFIED alone.
+
+**Triangulation:**
+1. Alex, 2026-07-21: "I don't think we need a whole new, different family… Haiku versus Opus… is
+   fine. Verification needs to happen when we're logging decision trees and when we're logging
+   reflections… the 2% once it happens compounds… when memory is logged incorrectly. It is very
+   important to verify everything… this is why agents fail over time." Ratified separate-but-cheap,
+   same family.
+2. D4 (maker≠verifier) + D18 (the reflection ritual is verifier-gated): this seats the long-empty
+   verifier and points it at the memory-write path, where the compounding risk lives.
+3. The audit: the verifier seat was instantiated nowhere; the one live verdict was self-signed
+   (Fable G5) — broad independent verification is the direct countermeasure.
+
+**Consequence (Phase 4 build):** the verifier seat in `factory.py`; the Haiku panel convened on
+every decision-tree and reflection write plus flagged claims; provider/model fingerprint recorded
+in each verdict so independence is auditable.
+
+---
+
+## D35 — REFUTED pauses and escalates; INSUFFICIENT flags; one trust number ✅ fresh
+
+**Decision:** a REFUTED verdict marks its decision/read **contested** (an appended contest event,
+never a deletion), removes it from the trusted read the next cycle compiles, and escalates to the
+human via the portal. A persistent INSUFFICIENT is recorded as a capability gap, not a silent
+pass. Both feed the confusion-harvest ("burns") that rides the next prompt. Trust is computed by
+**one canonical function** (`verify.trust_record`) that every surface delegates to.
+
+**Triangulation:**
+1. Alex, 2026-07-21: ratified the recommendation as written.
+2. The audit: verdicts gated nothing (a REFUTED claim left the decision active), and four
+   divergent trust formulas disagreed across pages (Fable G6/G8); the Phase-1 work already
+   collapsed the web displays onto `verify.trust_record`.
+3. D25 (outcome-not-existence) + [[D34]]: a refutation must *do* something for independent
+   verification to earn trust — consistent with [[D33]] because the verifier is a machine gate,
+   not a human one; only refutation and a named high-stakes class reach the human.
+
+**Consequence (Phase 4 build):** the contested-state transition + portal escalation rail; harvest
+wired to REFUTED/INSUFFICIENT; all trust reads routed through the one function.
+
+---
+
+## D36 — Everything is recorded within sessions; privacy is transparency + DM-scoping ✅ fresh
+
+**Decision:** the operating principle is **transparency**: everything is recorded within
+sessions, there is a legible **session log** (DM sessions individuated and understood as such),
+and anyone who speaks to the trellis agent should know they are being recorded. The owner simply
+does not discuss, with their agent, what they do not want on the record — this is a **personal**
+agent that *interacts with* a team, not a team-wide shared one. Enforcement stays lightweight and
+is not heavy code-level lockdown; the one hard rule is **DM-scoping**: a DM's content never
+crosses to a channel (the cross-surface leak checkpoints of the privacy lattice apply there).
+
+**Triangulation:**
+1. Alex, 2026-07-21: "all of this gets saved within sessions… a log of sessions… anyone who
+   speaks to your trellis agent should know that that is being recorded. I don't want this in the
+   code itself, but… it's all being recorded. The person that owns that trellis agent shouldn't
+   have a conversation about personal things if you don't want to record it… for personal use…
+   but it will be interacting with the team."
+2. D7 (privacy lives in the key) + [[D32]] (DMs in, scoped): the leak checkpoints exist to keep a
+   DM out of a channel; beyond that, the posture is recorded-and-legible, not paranoid.
+3. The audit: `can_flow`/`guard_flow` had zero callers (Fable G7) — wiring the DM→channel
+   checkpoint is the one privacy build that matters here.
+
+**Consequence (Phase 2/3 build):** scope recorded on writes so a DM cannot compile into a channel
+packet or a channel post; the session log as the transparency surface; a stated recording notice.
+No heavy per-item gating.
+
+---
+
+## D37 — Always-on with the machine, not a server daemon ✅ fresh
+
+**Decision:** trellis runs as a **local, always-on process tied to the owner's machine** — on
+while the computer is on, off when it is off — not a hosted server or a heavyweight daemon. A tick
+runs the due schedules (witness cycle, reflection, harvest) on a cadence; the spend cap is derived
+from ledger charge records (so it survives a restart); a health alert about the harness itself may
+bypass stage-don't-fire (it is the harness speaking, not the agent acting).
+
+**Triangulation:**
+1. Alex, 2026-07-21: "I don't [think] there necessarily needs to be a major daemon… trellis has a
+   current system where it's not a server, but it's always on… as long as my computer is on. If my
+   computer turns off, then trellis turns off." Ratified the runner recommendation, local flavor.
+2. D6 (time injected; scheduling is the deployment's choice) + the audit's scheduler-as-ledger-
+   state: registration and firings are ledger events, so a fresh process reconstructs state.
+3. The audit: no runner exists and `Budget` had no reset window (the "$300 in two days" risk) —
+   the ledger-derived cap is the countermeasure.
+
+**Consequence (Phase 3 build):** a `trellis run` login-scoped always-on process (a launchd/login
+item), the tick, the windowed ledger-derived budget, orphan-start health detection surfaced in the
+portal.
+
+---
+
+## D38 — Ship everything now to a personal Discord; no staged read-only rollout ✅ fresh
+
+**Decision:** this is not a cautious multi-week rollout. Build the full feature set — threads,
+DMs, the model on, the send executor — and turn it on **immediately on a personal (private)
+Discord server** to test end to end. It is not a public release. The staged read-only → model-on
+→ acting sequence is dropped. **(Scope note: this sets the launch *posture*; it does not by itself
+rescind refusal #5 / W3 — outbound sends remain human-approved (stage-don't-fire) until that is
+explicitly ratified. See "flag" below.)**
+
+**Triangulation:**
+1. Alex, 2026-07-21: "you're running this like it's the past. It is an agent-forward world. We put
+   this out immediately with everything available to it. We allow threads, we allow DMs, and we
+   just build everything. We're testing the Discord… released to a personal Discord server… we
+   might as well put everything in it… don't have to worry about… formal launch posture."
+2. The Phase-1 hardening (439 tests, 10/10 stress, the ledger/outbox/identity/verifier holes
+   closed) is what makes "ship everything at once" not reckless — the safety floor exists even
+   without a slow rollout to catch issues.
+3. D30 sequencing deferred the executor behind boring verified weeks; this decision overrides that
+   sequencing for a *private* server, where the blast radius is the owner's own community.
+
+**Consequence:** the phase plan collapses — build ingestion, the agency-preserving mind-change,
+broad verification, the runner, and the executor toward one private-server launch. **Flag for
+explicit confirmation:** whether the agent may *auto-post* to Discord, or continues to *stage for
+the owner's yes* (refusal #5). Default and recommendation: keep the human yes on outbound; make it
+autonomous only on an explicit ratification (it is the least-reversible property and the product's
+headline promise).
+
+---
+
 ## ⏳ Watch list (decisions deliberately NOT taken)
 
 - **W1 — No skill marketplace / no auto-installed skills.** [OPENCLAW] supply-chain
@@ -800,7 +1004,9 @@ the executor stays behind an explicit human "arm it" (W3 still stands).
   real bus is Discord + files. Revisit if an external ally demands it. [FIELD]
 - **W3 — No autonomous outbound.** Standing "proposed no" (Clare, 2026-06-16: "before
   we send swarms out into the internet"). Stage-don't-fire until the team ratifies
-  otherwise.
+  otherwise. *Revisited by [[D38]] (2026-07-21): the executor gets built and turned on
+  for a private server, but W3 (the human yes on each send) STILL STANDS — D38 explicitly
+  flags autonomous auto-post as needing its own explicit ratification, not yet given.*
 - **W4 — Memory-on-agent (Clare's mount-everything direction) not adopted.** The
   Brett/Clare fork is live; trellis takes Brett's side (memories beside, agent dies)
   because [MEM]+[FIELD]+[AUDIT] all point that way — but the fork is named in the
