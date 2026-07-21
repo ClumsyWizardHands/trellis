@@ -1,6 +1,6 @@
 # STRESS REPORT
 
-run: 2026-07-21T21:12:26+00:00 · python 3.11.13 · seed 20260715 (deterministic chaos)
+run: 2026-07-21T22:39:54+00:00 · python 3.11.13 · seed 20260715 (deterministic chaos)
 result: **10/10 attacks defeated**
 
 The suite's stance is the verifier's stance: each scenario ATTACKS one of
@@ -14,15 +14,15 @@ took 0.429s
   "entries": 5000,
   "corrections": 100,
   "append_s": 0.39,
-  "correct_s": 0.02,
+  "correct_s": 0.03,
   "search_s": 0.013,
-  "current_s": 0.0,
+  "current_s": 0.001,
   "file_mb": 1.0
 }
 ```
 
 ## ✅ session death: 200 chaotic runs — zero silent failures possible
-took 0.035s
+took 0.036s
 ```json
 {
   "runs": 200,
@@ -53,7 +53,7 @@ took 0.005s
 ```
 
 ## ✅ pass fuzz: 3000 random transitions — illegal ones always refused, none lost
-took 0.015s
+took 0.016s
 ```json
 {
   "transitions_attempted": 3000,
@@ -84,7 +84,7 @@ took 0.004s
 ```
 
 ## ✅ sycophancy pressure: T-shaped maybes refused; hidden nos surface
-took 0.002s
+took 0.003s
 ```json
 {
   "fake_Ts_refused": 200,
@@ -93,7 +93,7 @@ took 0.002s
 ```
 
 ## ✅ witness under a garbage model: 30 cycles of fluff produce zero fake decisions
-took 0.033s
+took 0.031s
 ```json
 {
   "cycles": 30,
@@ -105,7 +105,7 @@ took 0.033s
 ```
 
 ## ✅ concurrency: 8 threads x 500 appends — ledger stays readable, nothing lost
-took 0.351s
+took 0.349s
 ```json
 {
   "threads": 8,
