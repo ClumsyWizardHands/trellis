@@ -67,6 +67,29 @@ def _bounded_excerpt(text: str, max_chars: int = 400) -> str:
     return (text or "").strip()[:max_chars]
 
 
+def _read_scope_key(body: dict):
+    """Reconstruct the SOURCE ConversationKey recorded on a memory write (D36).
+    A body that no longer maps to a known Surface is dropped to None rather than
+    guessed — an unrankable scope is treated as unknown and fails closed upstream."""
+    d = body.get("scope_key")
+    if not d:
+        return None
+    from .surfaces import ConversationKey, Surface, ThreadRef
+    try:
+        surface = Surface(d.get("surface"))
+    except (ValueError, KeyError):
+        return None
+    thread = None
+    td = d.get("thread")
+    if td:
+        thread = ThreadRef(id=td.get("id", ""),
+                           parent_channel=td.get("parent_channel", ""),
+                           parent_message=td.get("parent_message"))
+    return ConversationKey(agent=d.get("agent", ""), surface=surface,
+                           scope=d.get("scope", ""), human=d.get("human", ""),
+                           thread=thread)
+
+
 ItemType = str   # "prior_read" | "decision" | "obligation" | "correction" | "verification"
 
 
@@ -146,26 +169,44 @@ class ContextCompiler:
         """Privacy-at-selection for the read BODY (not just its pointer): may this
         read's CONTENT be loaded into a packet keyed `packet_key`?
 
-        A read carrying no `surface` tag is the agent's OWN working read, reached
-        through the agent's own workspace handle — same-surface by construction, so
-        its content loads (this is not an 'unknown scope', it is the current read of
-        this very surface). A read that IS surface-tagged is compared by privacy
-        rank: content may sit in a packet at least as private as its source, never
-        less (the D7 direction). An unrankable tag, or a tag with no packet to
-        compare against, FAILS CLOSED — the body is withheld, the pointer remains.
-        (Scope-on-write for the agent's own reads is G7, owned elsewhere; until it
-        lands, an untagged own-read loads — see decisions_needed.)"""
-        surface = entry.body.get("surface")
-        if surface is None:
-            return True
+        The include/exclude runs through surfaces.can_flow with the FULL source key,
+        not a bare privacy rank (D36 / the Lane-E residual): can_flow already
+        encodes that a DM cannot flow to a channel AND that one human's DM cannot
+        flow to a DIFFERENT human's DM (same rank, still refused). A rank-only test
+        missed the second case and could load humanA's DM read into humanB's packet.
+
+        Precedence:
+          * a read carrying a recorded `scope_key` (the source ConversationKey) is
+            routed can_flow(src, packet) — the full-key decision;
+          * a read with no scope at all (no `scope_key`, no `surface` tag) is the
+            agent's OWN working read, reached through its own workspace handle —
+            same-surface by construction, so its content loads;
+          * a legacy `surface`-only tag (no human recorded) is routed can_flow too,
+            via a partial key with an unknown human — so a DM tag can never leak
+            cross-human even without a recorded human (fail closed);
+          * an unrankable scope, or any scope with no packet to compare against,
+            FAILS CLOSED — the body is withheld, the pointer remains."""
+        from .surfaces import ConversationKey, Surface, can_flow
+        src_key = _read_scope_key(entry.body)
+        if src_key is None:
+            if entry.body.get("scope_key"):
+                # a scope_key WAS recorded but could not be reconstructed (unknown
+                # surface / malformed) — it is a scoped read whose scope we cannot
+                # honour, so fail CLOSED. Never fall through to the own-read path:
+                # conflating "no scope recorded" with "scope present but unrankable"
+                # leaked a corrupt-surface DM body into a channel packet.
+                return False
+            surface = entry.body.get("surface")
+            if surface is None:
+                return True                       # untagged own working read
+            try:
+                src_key = ConversationKey(agent="", surface=Surface(surface),
+                                          scope="", human="")
+            except (ValueError, KeyError):
+                return False                      # unrankable/unknown tag — fail closed
         if packet_key is None:
-            return False
-        from .surfaces import Surface, _PRIVACY_RANK
-        try:
-            rank = _PRIVACY_RANK[Surface(surface)]
-        except (ValueError, KeyError):
-            return False
-        return rank <= packet_key.privacy_rank()
+            return False                          # nothing to compare against — fail closed
+        return can_flow(src_key, packet_key)
 
     def compile(self, subjects: list[str], surface_key: str = "",
                 budget_tokens: int = 3000, read_prefix: str = "read",

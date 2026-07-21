@@ -26,10 +26,32 @@ import hashlib
 import re
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Optional
+from typing import TYPE_CHECKING, Optional
 
 from .clock import TimeGround
 from .ledger import Ledger
+
+if TYPE_CHECKING:
+    from .surfaces import ConversationKey
+
+
+def _scope_to_body(scope: "Optional[ConversationKey]") -> Optional[dict]:
+    """Serialize the SOURCE ConversationKey of a memory write for the ledger
+    (D36 DM-scoping): a later reader must be able to tell a DM-scoped body from a
+    channel one, and — since a DM belongs to ONE human — WHICH human's DM, so a
+    cross-human leak is refusable at selection. Duck-typed (no hard surfaces
+    import) and mirrors stage.py's destination shape so the two round-trip alike."""
+    if scope is None:
+        return None
+    surface = getattr(scope.surface, "value", scope.surface)
+    d = {"agent": scope.agent, "surface": surface,
+         "scope": scope.scope, "human": scope.human}
+    thread = getattr(scope, "thread", None)
+    if thread is not None:
+        d["thread"] = {"id": thread.id,
+                       "parent_channel": thread.parent_channel,
+                       "parent_message": thread.parent_message}
+    return d
 
 
 class WorkspaceEscapeError(ValueError):
@@ -165,7 +187,8 @@ class Workspace:
 
     def write(self, rel_path: str, content: str, author: str,
               synthesis_justification: str,
-              title: Optional[str] = None) -> WriteReceipt:
+              title: Optional[str] = None,
+              scope: "Optional[ConversationKey]" = None) -> WriteReceipt:
         problem = _fails_synthesis(synthesis_justification)
         if problem:
             raise SynthesisTestError(problem)
@@ -208,7 +231,11 @@ class Workspace:
                   # the stress-test's "reconstructable from the ledger" flaw).
                   "content_hash": hashlib.sha256(content.encode("utf-8")).hexdigest()[:16],
                   "synthesis_justification": synthesis_justification,
-                  "prior_history": history_ref},
+                  "prior_history": history_ref,
+                  # D36: the source scope travels with the write so a later reader
+                  # routes the include/exclude through surfaces.can_flow (full key),
+                  # not a bare privacy rank. None for legacy/unscoped writes.
+                  "scope_key": _scope_to_body(scope)},
             tags=("memory",),
             supersedes=prior.id if prior is not None else None,
         )
