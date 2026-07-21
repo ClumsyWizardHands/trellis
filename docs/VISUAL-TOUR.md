@@ -515,8 +515,8 @@ flowchart LR
     class HOME,ACT,AG,DEC,LP,VE,RE,MAP,ASK,IN p
 ```
 
-Its heart is the **Reflection** page — the daily self-image ritual. Every trait
-of the creature ties to real, cited events; a self-change is a verified proposal,
+Its heart is the **Reflection** page — the daily self-image ritual. Every mark
+of the instrument ties to real, cited events; a self-change is a verified proposal,
 never a vibe (full design + the honesty guardrails:
 [`ROADMAP-UI-SPINE.md`](ROADMAP-UI-SPINE.md)):
 
