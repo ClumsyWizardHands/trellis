@@ -64,10 +64,23 @@ class ConversationKey:
     thread: Optional[ThreadRef] = None
 
     def storage_key(self) -> str:
-        """Filesystem/session-safe key. Distinct keys can never collide into
-        one loop — the user_id-only conflation is unrepresentable."""
+        """Filesystem/session-safe key, INJECTIVELY encoded. Distinct tuples can
+        never collide into one key — the user_id-only conflation is
+        unrepresentable, and (Codex High 7) a `__` INSIDE a field can no longer
+        masquerade as the delimiter. Each field escapes `%` then `_`, so the only
+        `__` in the result is a real delimiter — the encoding is reversible and
+        one-to-one. Example that used to collide, now distinct:
+          scope='s',   thread='a__b'  → …__s__a%5F%5Fb__…
+          scope='s__a', thread='b'    → …__s%5F%5Fa__b__…"""
+        def esc(s: str) -> str:
+            # percent-escape everything unsafe (incl. '/'), then '_' — so the
+            # result is filesystem-safe AND contains no '_', making the '__'
+            # delimiter unambiguous (one-to-one).
+            from urllib.parse import quote
+            return quote(s or "", safe="").replace("_", "%5F")
         t = self.thread.id if self.thread else "-"
-        return f"{self.agent}__{self.surface.value}__{self.scope}__{t}__{self.human or '-'}"
+        return "__".join(esc(f) for f in
+                         (self.agent, self.surface.value, self.scope, t, self.human or "-"))
 
     def privacy_rank(self) -> int:
         return _PRIVACY_RANK[self.surface]

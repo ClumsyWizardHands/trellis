@@ -32,6 +32,12 @@ from .clock import TimeGround
 from .ledger import Ledger
 
 
+class WorkspaceEscapeError(ValueError):
+    """A read/write/map path resolved OUTSIDE the workspace root — a `../`
+    traversal or a symlink escape. The workspace is the trust boundary (Codex
+    High 8)."""
+
+
 class SynthesisTestError(Exception):
     """The write didn't justify its own persistence."""
 
@@ -173,10 +179,8 @@ class Workspace:
             the_title = title.strip()
         else:
             the_title = self._derive_title(content)
-        path = (self.root / rel_path).resolve()
-        if self.root.resolve() not in path.parents and path != self.root.resolve():
-            raise ValueError(f"write escapes workspace: {rel_path}")
-        rel = str(path.relative_to(self.root))
+        path = self._contained(rel_path)   # the workspace is the trust boundary (High 8)
+        rel = str(path.relative_to(self.root.resolve()))
         path.parent.mkdir(parents=True, exist_ok=True)
 
         # 2e — FOLD, don't clobber. If this path already holds an active write,
@@ -210,8 +214,21 @@ class Workspace:
         )
         return WriteReceipt(str(path), entry.id, synthesis_justification)
 
+    def _contained(self, rel_path: str) -> Path:
+        """Resolve rel_path and REFUSE anything that escapes the workspace root —
+        a `../` traversal or a symlink pointing outside (Codex High 8: write()
+        checked containment but read()/map() did not, so `read('../secret.md')`
+        escaped). resolve() follows symlinks, so a symlinked path that lands
+        outside the root is caught too. The workspace is the trust boundary."""
+        root = self.root.resolve()
+        path = (self.root / rel_path).resolve()
+        if path != root and root not in path.parents:
+            raise WorkspaceEscapeError(
+                f"path escapes the workspace: {rel_path!r} → {path}")
+        return path
+
     def read(self, rel_path: str) -> str:
-        return (self.root / rel_path).read_text(encoding="utf-8")
+        return self._contained(rel_path).read_text(encoding="utf-8")
 
     # ----- 2a: search by title (navigate; open bodies on demand) -------------
 
@@ -241,9 +258,14 @@ class Workspace:
 
     def map(self) -> list[str]:
         """Titles-only map for prompt injection — the navigational cold layer.
-        The map, never the territory."""
+        The map, never the territory. A symlinked .md pointing OUTSIDE the
+        workspace is skipped, never read into the prompt (Codex High 8)."""
         out = []
+        root = self.root.resolve()
         for p in sorted(self.root.rglob("*.md")):
+            resolved = p.resolve()
+            if resolved != root and root not in resolved.parents:
+                continue   # a symlink escaping the workspace — do not read it in
             rel = p.relative_to(self.root)
             first = ""
             try:
