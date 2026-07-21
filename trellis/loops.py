@@ -65,6 +65,35 @@ class LoopBudgetExceeded(Exception):
     pass
 
 
+@dataclass
+class Budget:
+    """A real resource bound on actual model work (Codex High 10): `max_turns`
+    counts harness ticks, not provider turns, tokens, wall-clock, or dollars — a
+    Witness can call an adapter twice and each invocation burn many nested SDK
+    turns. A Budget bounds what actually costs money: wall-clock, provider calls,
+    and tokens (estimated when the provider doesn't report usage). Shared across a
+    run; a bound is a principle for a personal agent ("$300 in two days" — OpenClaw),
+    not a nicety."""
+    max_wall_seconds: Optional[float] = None
+    max_provider_calls: Optional[int] = None
+    max_tokens: Optional[int] = None            # input + output, estimated if unreported
+    spent_provider_calls: int = 0
+    spent_tokens: int = 0
+
+    def charge(self, input_tokens: int = 0, output_tokens: int = 0) -> None:
+        self.spent_provider_calls += 1
+        self.spent_tokens += max(0, input_tokens) + max(0, output_tokens)
+
+    def exceeded(self, elapsed_seconds: float = 0.0) -> Optional[str]:
+        if self.max_wall_seconds is not None and elapsed_seconds > self.max_wall_seconds:
+            return f"wall-clock {elapsed_seconds:.0f}s > {self.max_wall_seconds:.0f}s"
+        if self.max_provider_calls is not None and self.spent_provider_calls > self.max_provider_calls:
+            return f"provider calls {self.spent_provider_calls} > {self.max_provider_calls}"
+        if self.max_tokens is not None and self.spent_tokens > self.max_tokens:
+            return f"tokens {self.spent_tokens} > {self.max_tokens}"
+        return None
+
+
 class OutcomePersistenceError(Exception):
     """The loop finished but its outcome could not be written to the ledger. We
     refuse to report success on an unrecorded run — silence is the cardinal sin,
@@ -101,11 +130,14 @@ class LoopRun:
         # written by the harness with the traceback attached.
     """
 
-    def __init__(self, spec: LoopSpec, registry: "LoopRegistry", actor: str):
+    def __init__(self, spec: LoopSpec, registry: "LoopRegistry", actor: str,
+                 budget: Optional[Budget] = None):
         self.spec = spec
         self.registry = registry
         self.actor = actor
         self.ground = registry.ground
+        self.budget = budget                 # optional real resource bound (High 10)
+        self._started_at = self.ground.now()
         self.run_id = uuid.uuid4().hex[:12]
         self.turns = 0
         self.tool_calls = 0
@@ -114,6 +146,9 @@ class LoopRun:
 
     # ----- budget ----------------------------------------------------------
 
+    def _elapsed(self) -> float:
+        return (self.ground.now() - self._started_at).total_seconds()
+
     def tick(self) -> bool:
         if self._outcome is not None:
             return False
@@ -121,8 +156,23 @@ class LoopRun:
             self._set(Outcome.BUDGET_EXCEEDED,
                       {"reason": f"max_turns {self.spec.max_turns} reached"})
             return False
+        # a REAL resource bound, not just a tick count (High 10): wall-clock,
+        # provider calls, and tokens actually spent.
+        if self.budget is not None:
+            over = self.budget.exceeded(self._elapsed())
+            if over:
+                self._set(Outcome.BUDGET_EXCEEDED, {"reason": f"budget: {over}"})
+                return False
         self.turns += 1
         return True
+
+    def charge(self, input_tokens: int = 0, output_tokens: int = 0) -> None:
+        """Record a provider call's cost against the run's Budget (the Witness calls
+        this after each model turn). If it pushes the run over budget, the next
+        tick() ends the run as BUDGET_EXCEEDED — nested model work is now bounded,
+        not just the outer harness ticks."""
+        if self.budget is not None:
+            self.budget.charge(input_tokens, output_tokens)
 
     def count_tool_call(self) -> None:
         self.tool_calls += 1

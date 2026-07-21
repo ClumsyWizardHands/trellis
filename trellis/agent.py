@@ -36,7 +36,7 @@ from .clock import TimeGround
 from .decisions import Decision, DecisionLog, POV, Verdict
 from .emp import EMP
 from .ledger import Ledger
-from .loops import LoopRegistry, LoopRun, LoopSpec, Outcome
+from .loops import Budget, LoopRegistry, LoopRun, LoopSpec, Outcome
 from .memory import Workspace
 from .passes import PassExchange
 from .prompt import assemble_prompt
@@ -94,6 +94,7 @@ class Witness:
         exchange: Optional[PassExchange] = None,
         ground: Optional[TimeGround] = None,
         verifier: Optional[RuleVerifier] = None,
+        budget: Optional["Budget"] = None,
     ):
         self.emp = emp
         self.provider = provider
@@ -102,6 +103,7 @@ class Witness:
         self.key = key
         self.exchange = exchange
         self.ground = ground or ledger.ground
+        self.budget = budget            # optional real resource bound (High 10)
         self.decisions = DecisionLog(ledger, self.ground)
         self.loops = LoopRegistry(ledger, self.ground)
         self.outbox = Outbox(ledger, self.ground)
@@ -127,7 +129,7 @@ class Witness:
             max_turns=6,
             stop_condition="read updated and opinions recorded (possibly zero)",
         )
-        with LoopRun(spec, self.loops, actor=self.id) as run:
+        with LoopRun(spec, self.loops, actor=self.id, budget=self.budget) as run:
             # SENSE — annotate every event with its true age before the model sees it
             sensed = [
                 self.ground.annotate(f"{e.source}: {e.content}", e.event_time,
@@ -216,6 +218,12 @@ class Witness:
             if not run.tick():
                 return []
             resp: ProviderResponse = self.provider.complete(system=system, messages=messages)
+            # charge the run's budget for the model work actually done (High 10):
+            # prefer provider-reported usage, else estimate from text length.
+            usage = getattr(resp, "usage", None) or {}
+            in_tok = usage.get("input_tokens") or (len(system) + sum(len(m["content"]) for m in messages)) // 4
+            out_tok = usage.get("output_tokens") or len(resp.text or "") // 4
+            run.charge(in_tok, out_tok)
             try:
                 return self._parse_opinions(resp.text or "")
             except ValueError as e:
