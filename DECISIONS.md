@@ -655,6 +655,38 @@ human — it cannot make a remote service deduplicate. Plan: `docs/PLAN-durable-
 
 ---
 
+## D27 — Reads are cached, rebuildable from the file — the record compounds without slowing ✅ fresh
+
+**Decision:** the ledger keeps a **rebuildable in-memory read cache** so it parses each JSONL
+line **exactly once** instead of re-parsing the whole file on every `entries()` call. The cache
+is keyed on a **byte offset**: a read syncs only the bytes appended since last time. The **file
+remains the sole source of truth** — the cache is reconstructable at any moment, a file
+shrink/rewrite triggers a full rebuild, and a corrupt line still raises without leaving a
+half-synced cache. Append-only, bitemporal, and greppable are all untouched; the file format is
+unchanged.
+
+**Triangulation:**
+1. My own §5 audit (2026-07-17) + Codex High 6: `entries()` re-parsed the whole file on every
+   call, so any read-per-write pattern (`DecisionLog.record` → `active()` → `entries()`) was O(n)
+   per op and O(n²) as the record grows — the *opposite* of the "compounds over time" thesis
+   (`WHAT-THIS-IS.md`). Measured: building 10k decisions took ~230s; `entries()` ~44ms at 10k.
+2. D2 (append-only, the file is the truth): the cache must never become a second source of
+   truth — hence rebuildable-from-the-file, offset-synced, shrink-detecting. An index that can
+   drift is refused.
+3. The concurrency stress (8 threads × one shared `Ledger`): the cache is guarded by a reentrant
+   lock and only parses COMPLETE lines, so concurrent appends lose nothing and a reader never
+   sees a torn write.
+
+**Consequence:** `trellis/ledger.py` — `_sync_locked()` + a byte offset + an `RLock`; `entries()`
+returns a fresh list off the cache; `append()` only writes (the file stays truth). **Measured
+after:** 10k build 230s → **~10s**; `entries()` 44ms → **~0.03ms**; `active()` 44ms → **~0.9ms**.
+Honest scope: the remaining cost is the O(n) *filter* in `active()`/`active_head` (no longer a
+re-parse) — fine for the real daily workload (append a few/day, read often); an incremental
+question-key→head index for true O(n) writes is the next step, not this one. Tests:
+`test_ledger_cache.py`.
+
+---
+
 ## ⏳ Watch list (decisions deliberately NOT taken)
 
 - **W1 — No skill marketplace / no auto-installed skills.** [OPENCLAW] supply-chain

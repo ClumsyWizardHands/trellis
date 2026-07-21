@@ -17,8 +17,10 @@ that landed and held. Kept, hardened, generalized:
 from __future__ import annotations
 
 import json
+import os
 import re
 import sqlite3
+import threading
 import uuid
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -99,6 +101,60 @@ class Ledger:
         self.ground = ground or TimeGround()
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self.path.touch(exist_ok=True)
+        # --- rebuildable read cache (D27) ---------------------------------
+        # The FILE is the sole source of truth; this is a performance layer that
+        # only ever PARSES EACH LINE ONCE. entries() used to re-parse the whole
+        # JSONL on every call, so any read-per-write pattern (DecisionLog.record →
+        # active() → entries()) was O(n) per op → O(n^2) as the record compounds —
+        # the opposite of the "compounds over time" thesis. The cache is keyed on a
+        # byte offset: a sync reads only the bytes appended since last time, parses
+        # the new whole lines, and appends them. It is rebuildable from the file at
+        # any moment (a shrink/rewrite triggers a full rebuild), so it can never be
+        # a second source of truth. A reentrant lock makes it safe for the
+        # single-instance multi-thread case the concurrency stress exercises.
+        self._lock = threading.RLock()
+        self._cache: list[Entry] = []
+        self._synced_bytes: int = 0
+
+    def _sync_locked(self) -> None:
+        """Bring the cache up to the file's current end. Must hold self._lock.
+        Parses only the bytes appended since the last sync (each line once); a
+        file smaller than what we've synced (a rewrite/truncate) triggers a full
+        rebuild. A corrupt COMPLETE line raises without advancing the offset or
+        mutating the cache, so the error is consistent across calls and never
+        leaves a half-synced cache (matching the old whole-file-or-raise contract)."""
+        try:
+            size = os.path.getsize(self.path)
+        except FileNotFoundError:
+            self._cache = []
+            self._synced_bytes = 0
+            return
+        if size < self._synced_bytes:
+            # the file shrank or was rewritten — the offset is meaningless; rebuild.
+            self._cache = []
+            self._synced_bytes = 0
+        if size <= self._synced_bytes:
+            return
+        with self.path.open("rb") as f:
+            f.seek(self._synced_bytes)
+            chunk = f.read(size - self._synced_bytes)
+        last_nl = chunk.rfind(b"\n")
+        if last_nl == -1:
+            return   # no complete line yet (a writer may be mid-append)
+        whole = chunk[: last_nl + 1]
+        parsed: list[Entry] = []
+        for raw in whole.split(b"\n"):
+            s = raw.strip()
+            if not s:
+                continue
+            try:
+                parsed.append(Entry.from_json(s.decode("utf-8")))
+            except Exception as e:  # a corrupt line is reported, never skipped silently
+                raise LedgerIntegrityError(f"{self.path} unreadable near byte "
+                                           f"{self._synced_bytes}: {e}") from e
+        # only commit once the whole chunk parsed cleanly
+        self._cache.extend(parsed)
+        self._synced_bytes += len(whole)
 
     # ----- write -----------------------------------------------------------
 
@@ -132,6 +188,11 @@ class Ledger:
             tags=tuple(tags),
             supersedes=supersedes,
         )
+        # append only WRITES (an atomic OS append); it never touches the cache, so
+        # it stays coherent under multi-instance writes — entries() syncs from the
+        # file (the sole truth), parsing each new line exactly once. The OS append
+        # is atomic per line, and the sync only parses COMPLETE lines, so a reader
+        # can never see a torn write.
         with self.path.open("a", encoding="utf-8") as f:
             f.write(entry.to_json() + "\n")
         return entry
@@ -192,17 +253,14 @@ class Ledger:
     # ----- read ------------------------------------------------------------
 
     def entries(self) -> list[Entry]:
-        out = []
-        with self.path.open("r", encoding="utf-8") as f:
-            for i, line in enumerate(f, 1):
-                line = line.strip()
-                if not line:
-                    continue
-                try:
-                    out.append(Entry.from_json(line))
-                except Exception as e:  # a corrupt line is reported, never skipped silently
-                    raise LedgerIntegrityError(f"{self.path}:{i} unreadable: {e}") from e
-        return out
+        """Every entry, oldest first. Backed by the rebuildable cache (D27): the
+        file is re-parsed incrementally (only newly-appended lines), not in full,
+        so repeated reads and read-per-write patterns stop being O(n)/O(n^2).
+        Returns a fresh list, so a caller iterating it is unaffected by a
+        concurrent append. A corrupt line still raises LedgerIntegrityError."""
+        with self._lock:
+            self._sync_locked()
+            return list(self._cache)
 
     def get(self, entry_id: str) -> Optional[Entry]:
         for e in self.entries():
