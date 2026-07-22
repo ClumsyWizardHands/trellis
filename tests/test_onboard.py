@@ -422,6 +422,109 @@ def test_broken_source_is_reported_not_fatal(ledger, tmp_path, ground):
     assert summary["awaiting"] and "grant" in summary["awaiting"][0]["why"]
 
 
+# --------------------------------------------------------------------------- #
+# 6. pace + the temporal wave — ingested is not understood; presence decays    #
+# --------------------------------------------------------------------------- #
+
+def test_comprehension_separates_ingested_from_understood(ledger, tmp_path,
+                                                          ground):
+    from trellis.onboard import comprehension
+    _grant(ledger)
+    _seed_messages(ledger, EMPIRE_TEXTS)                 # 5 corpus items
+    comp0 = comprehension(ledger)
+    assert comp0["ingested"] == 5 and comp0["walked"] == 0   # swallowed ≠ walked
+
+    ritual = _ritual(ledger, tmp_path, ground, seed_terms=("empire",))
+    summary = ritual.learning_pass(max_terms=1)
+    comp = summary["comprehension"]
+    assert 0 < comp["walked"] <= comp["ingested"]
+    assert comp["terms_open"] >= 1 and comp["terms_known"] == 0
+    # the honest ratio is rendered where humans look
+    surfaces_note = ritual.workspace.read("map/surfaces.md")
+    assert "ingested is NOT understood" in surfaces_note
+
+
+def test_quiet_voice_becomes_a_question_never_a_conclusion(ledger, tmp_path,
+                                                           ground, clock):
+    from trellis.onboard import mint_presence_curiosities, write_map_overview
+    from trellis.curiosity import QuestionLog
+    # sarah spoke months ago and went quiet; brett is current
+    _seed_messages(ledger, [("sarah", ["old note one", "old note two",
+                                       "old note three"])])
+    clock.advance(days=200)
+    fresh = [DiscordMessage(
+                 author="brett", content=f"fresh word {i}",
+                 posted_at=ground.now() - timedelta(hours=3 - i), channel=CHAN,
+                 channel_name="main", message_id=str(2000 + i),
+                 author_id="u-brett")
+             for i in range(3)]
+    ingest_scoped_discord_idempotent(ledger, fresh, _iso(),
+                                     IdentityRegistry(ledger))
+    qlog = QuestionLog(ledger, ground)
+    minted = mint_presence_curiosities(ledger, qlog, "trellis-onboard", ground)
+    titles = [m.body["title"] for m in minted]
+    assert titles == ["Is sarah still an active voice here?"]   # asked, not asserted
+    assert "presence" in minted[0].body["assumption"]
+    # folding: a re-scan re-asks the SAME node, no duplicate
+    minted2 = mint_presence_curiosities(ledger, qlog, "trellis-onboard", ground)
+    assert minted2[0].body["reasked"] == 1
+    assert len([q for q in qlog.open_questions()
+                if "presence" in q.body.get("assumption", "")]) == 1
+
+    # the people map shows recency and frames dormancy as an open question
+    ws = Workspace(tmp_path / "ws", ledger)
+    write_map_overview(ledger, ws, IdentityRegistry(ledger), qlog,
+                       "trellis-onboard", ground)
+    people = ws.read("map/people.md")
+    assert "last heard" in people
+    assert "OPEN QUESTION" in people                    # sarah's dormancy
+    assert "never a departure I am asserting" in people
+
+
+def test_checkin_note_folds_and_digest_stages_only_on_real_news(
+        ledger, tmp_path, ground):
+    from trellis.stage import Outbox
+    from trellis.isolation import AgentIdentity, Isolation, SurfaceAllowlist
+    _grant(ledger)
+    _seed_messages(ledger, EMPIRE_TEXTS)
+    iso = Isolation(identity=AgentIdentity(name="trellis"),
+                    allow=SurfaceAllowlist(read=frozenset((CHAN,)),
+                                           act=frozenset(("chan-checkin",))))
+    ws = Workspace(tmp_path / "ws", ledger)
+    maker = MockProvider(id="mock:sonnet")
+    maker.enqueue_text(json.dumps({"meaning": "the tended whole",
+                                   "confidence": 0.8, "unsure": ""}))
+    panel = _panel(ledger, ["VERIFIED\nsupported"] * 4)
+    ritual = OnboardingRitual(ledger, ws, ground=ground, provider=maker,
+                              verifier=panel, registry=IdentityRegistry(ledger),
+                              seed_terms=["empire"],
+                              outbox=Outbox(ledger, iso=iso),
+                              checkin_target="chan-checkin")
+
+    summary = ritual.learning_pass(max_terms=1)
+    # a resolution is real news → the digest is STAGED (never fired)
+    assert summary["terms_resolved"] == ["empire"]
+    assert summary.get("checkin_staged")
+    staged = [e for e in ledger.entries() if e.kind == "staged_action"]
+    assert staged and staged[-1].body["status"] == "staged"
+    assert "Check-in" in staged[-1].body["content"]
+    assert not any("fir" in e.kind for e in ledger.entries())
+    # the note exists and folds per day
+    note = ws.read(summary["checkin"])
+    assert "Newly settled" in note and "many sessions" in note
+
+    # a quiet pass (nothing settled, nothing contested) stages NO digest
+    n_staged = len(staged)
+    summary2 = ritual.learning_pass(max_terms=1)
+    assert not summary2.get("checkin_staged")
+    assert len([e for e in ledger.entries()
+                if e.kind == "staged_action"]) == n_staged
+    # but the day's note still folded to the latest state (one active write)
+    checkins = [e for e in ledger.active("memory_write")
+                if e.body.get("path", "").startswith("map/checkins/")]
+    assert len(checkins) == 1
+
+
 def test_onboarding_handler_runs_under_the_runner(ledger, tmp_path, ground):
     from datetime import timedelta as td
     from trellis.runner import Runner

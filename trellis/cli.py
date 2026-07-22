@@ -755,10 +755,22 @@ def _build_onboarding(ledger, iso, registry, seed_terms):
         notes.append(f"Discord backfill: {len(iso.allow.read)} read surface(s), "
                      "oldest→newest, resumable")
 
+    # check-in digests: when an ACT surface is armed, new learnings STAGE a
+    # digest there (posts only after the owner's ✅) — the discussion comes to
+    # the human instead of waiting to be found.
+    outbox, checkin_target = None, ""
+    if iso.allow.act:
+        from .stage import Outbox
+        checkin_target = sorted(iso.allow.act)[0]
+        outbox = Outbox(ledger, iso=iso)
+        notes.append(f"check-in digests stage to {checkin_target} when "
+                     "something settles or breaks (still your ✅ to post)")
+
     workspace = Workspace(_workspace_root(), ledger)
     ritual = OnboardingRitual(ledger, workspace, provider=provider,
                               verifier=verifier, registry=registry,
-                              seed_terms=seed_terms)
+                              seed_terms=seed_terms,
+                              outbox=outbox, checkin_target=checkin_target)
     return ritual, sources, backfill, client, iso, surfaces, notes
 
 
@@ -778,7 +790,18 @@ def _print_pass_summary(summary: dict) -> None:
         print(f"  curious about: {', '.join(minted)}")
     for p in summary.get("terms_pursued", []):
         print(f"  · '{p['term']}' — {p['outcome']}")
+    for t in summary.get("presence_questions", []):
+        print(f"  ? {t}")
     print(f"  open unknowns on the record: {summary.get('open_unknowns', 0)}")
+    comp = summary.get("comprehension")
+    if comp:
+        print(f"  comprehension: walked {comp['walked']}/{comp['ingested']} "
+              f"ingested items ({comp['pct_walked']}%) · "
+              f"{comp['terms_known']} meaning(s) known, {comp['terms_open']} open "
+              "— ingested is not understood; this takes many sessions")
+    if summary.get("checkin"):
+        print(f"  check-in written: {summary['checkin']}"
+              + (" (digest STAGED for your ✅)" if summary.get("checkin_staged") else ""))
 
 
 def cmd_begin(args: argparse.Namespace) -> int:

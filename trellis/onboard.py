@@ -39,7 +39,8 @@ from datetime import datetime, timedelta
 from typing import Iterable, List, Optional
 
 from .clock import TimeGround
-from .curiosity import NotResolvedError, Question, QuestionLog, assumption_key
+from .curiosity import (QUESTION_KIND, NotResolvedError, Question, QuestionLog,
+                        assumption_key)
 from .decisions import question_key
 from .identity import require_identity
 from .ledger import Entry, Ledger
@@ -629,6 +630,90 @@ def confirm_term_meaning(ledger: Ledger, workspace: Workspace, qlog: QuestionLog
 
 
 # ---------------------------------------------------------------------------
+# 5a. comprehension debt — ingested is NOT understood
+# ---------------------------------------------------------------------------
+
+#: a voice silent longer than this (with enough history to matter) becomes an
+#: open QUESTION about presence — asked, never assumed.
+DORMANT_AFTER_DAYS = 90
+DORMANT_MIN_MESSAGES = 3
+
+
+def comprehension(ledger: Ledger) -> dict:
+    """The honest ratio that kills the done-illusion: how much of what was
+    INGESTED has actually been WALKED (cited in at least one traced
+    observation), and how many meanings are truly known vs still open.
+    Swallowing a corpus is minutes; understanding it is many sessions — this
+    number is what keeps that difference visible."""
+    corpus = ledger.active("discord_message") + ledger.active(SOURCE_DOCUMENT_KIND)
+    corpus_ids = {e.id for e in corpus}
+    cited: set = set()
+    for e in ledger.active(TERM_OBSERVATION_KIND):
+        for eid in (e.body.get("lineage", {}) or {}).get("entry_ids") or []:
+            cited.add(eid)
+    walked = len(cited & corpus_ids)
+    open_terms, known_terms = 0, 0
+    # questions fold by supersession — count from the ACTIVE set
+    for e in ledger.active(QUESTION_KIND):
+        if not term_from_assumption(e.body.get("assumption", "")):
+            continue
+        if e.body.get("status") == "open":
+            open_terms += 1
+        elif e.body.get("status") == "resolved":
+            known_terms += 1
+    pct = round(100.0 * walked / len(corpus_ids), 1) if corpus_ids else 0.0
+    return {"ingested": len(corpus_ids), "walked": walked, "pct_walked": pct,
+            "terms_open": open_terms, "terms_known": known_terms}
+
+
+def _presence(ledger: Ledger) -> dict:
+    """Per-voice recency from the attributed record (Discord messages — a
+    document's speaker attribution is not built, so documents do not count as
+    presence). {author: {count, first, last}} by event_time."""
+    out: dict = {}
+    for e in ledger.active("discord_message"):
+        p = out.setdefault(e.author, {"count": 0, "first": e.stamp.event_time,
+                                      "last": e.stamp.event_time})
+        p["count"] += 1
+        if e.stamp.event_time < p["first"]:
+            p["first"] = e.stamp.event_time
+        if e.stamp.event_time > p["last"]:
+            p["last"] = e.stamp.event_time
+    return out
+
+
+def mint_presence_curiosities(ledger: Ledger, qlog: QuestionLog, author: str,
+                              ground: TimeGround,
+                              dormant_days: int = DORMANT_AFTER_DAYS,
+                              min_messages: int = DORMANT_MIN_MESSAGES) -> List[Entry]:
+    """A voice that went quiet is a QUESTION, not a conclusion: trellis never
+    infers 'X left' — it notices 'X has not appeared in N days' and asks. The
+    same anti-time-blindness discipline as everywhere else: presence in the
+    record decays, and the decay is surfaced instead of the last state being
+    silently treated as current. Folds onto one node per person (re-ask)."""
+    now = ground.now()
+    minted = []
+    for name, p in sorted(_presence(ledger).items()):
+        if p["count"] < min_messages:
+            continue
+        silent_days = (now - p["last"]).days
+        if silent_days < dormant_days:
+            continue
+        q = Question(
+            title=f"Is {name} still an active voice here?",
+            assumption=f"the presence of '{name}' in this place is current",
+            what_would_resolve=(
+                f"they last appeared {ground.age_phrase(p['last'])} "
+                f"({p['last'].date().isoformat()}). A recent message, an explicit "
+                "statement in the record (a departure/arrival note), or the "
+                "human saying so would settle it — my silence-count alone never will."),
+            owner=author,
+            revisit_at=now + timedelta(days=14))
+        minted.append(qlog.ask(q, author=author))
+    return minted
+
+
+# ---------------------------------------------------------------------------
 # 5. the map — people, surfaces, coverage, and honest unknowns
 # ---------------------------------------------------------------------------
 
@@ -643,26 +728,38 @@ def write_map_overview(ledger: Ledger, workspace: Workspace, registry,
     now = ground.now().isoformat()
     written: List[str] = []
 
-    counts: dict = {}
-    for e in ledger.active("discord_message"):
-        counts[e.author] = counts.get(e.author, 0) + 1
+    presence = _presence(ledger)
+
+    def _recency(name: str) -> str:
+        p = presence.get(name)
+        if p is None:
+            return ""
+        silent = (ground.now() - p["last"]).days
+        tag = (f" · **quiet for {silent}d — presence is an OPEN QUESTION, "
+               "not a fact**" if silent >= DORMANT_AFTER_DAYS
+               and p["count"] >= DORMANT_MIN_MESSAGES else "")
+        return (f", last heard {ground.age_phrase(p['last'])} "
+                f"({p['last'].date().isoformat()}){tag}")
+
     people_lines = [f"# People seen in this record — as of {now}", ""]
     identities = registry.all() if registry is not None else []
     if identities:
         for ident in identities:
-            n = counts.get(ident.label, 0)
+            n = presence.get(ident.label, {}).get("count", 0)
             people_lines.append(
                 f"- **{ident.label or ident.canonical_id}** (`{ident.canonical_id}`) — "
                 f"first seen {ident.first_seen.date().isoformat()}, "
-                f"{n} message(s) under this label")
-    for author_name, n in sorted(counts.items(), key=lambda x: -x[1]):
+                f"{n} message(s) under this label{_recency(ident.label)}")
+    for author_name, p in sorted(presence.items(), key=lambda x: -x[1]["count"]):
         if not any(i.label == author_name for i in identities):
-            people_lines.append(f"- **{author_name}** — {n} message(s) "
-                                "(no stable id registered yet)")
+            people_lines.append(f"- **{author_name}** — {p['count']} message(s) "
+                                f"(no stable id registered yet){_recency(author_name)}")
     if len(people_lines) == 2:
         people_lines.append("_(no one yet — the record is still filling in)_")
     people_lines += ["", "_Counts are what I have ingested, not who exists; "
-                     "absence here is absence from my read, nothing more._"]
+                     "absence here is absence from my read, nothing more. A "
+                     "long-quiet voice is a question I am asking, never a "
+                     "departure I am asserting._"]
     written.append(workspace.write(
         "map/people.md", "\n".join(people_lines), author=author,
         title="Map: the people seen in this record",
@@ -680,10 +777,20 @@ def write_map_overview(ledger: Ledger, workspace: Workspace, registry,
     if not sessions:
         surf_lines.append("_(no conversations ingested yet)_")
     cov = Ingestor(ledger, author=author).coverage()
+    comp = comprehension(ledger)
     surf_lines += ["", "## Coverage (what has actually been read)",
                    f"- items ingested: {cov['items_ingested']}",
                    f"- by source: {cov['by_source'] or '—'}",
-                   f"- resting on machine transcription: {cov['machine_transcribed']}"]
+                   f"- resting on machine transcription: {cov['machine_transcribed']}",
+                   "",
+                   "## Comprehension (ingested is NOT understood)",
+                   f"- walked: {comp['walked']} of {comp['ingested']} ingested items "
+                   f"cited in a traced observation ({comp['pct_walked']}%)",
+                   f"- meanings: {comp['terms_known']} known (verified or "
+                   f"human-confirmed) · {comp['terms_open']} still open",
+                   "- _swallowing the corpus took minutes; understanding it is "
+                   "many sessions of tracing, verifying, and discussing — this "
+                   "ratio is the honest distance between the two._"]
     written.append(workspace.write(
         "map/surfaces.md", "\n".join(surf_lines), author=author,
         title="Map: surfaces, conversations, and ingestion coverage",
@@ -746,7 +853,8 @@ class OnboardingRitual:
                  provider=None, verifier=None, registry=None,
                  author: str = "trellis-onboard",
                  seed_terms: Optional[List[str]] = None,
-                 scout: Optional[TermScout] = None):
+                 scout: Optional[TermScout] = None,
+                 outbox=None, checkin_target: str = ""):
         self.ledger = ledger
         self.workspace = workspace
         self.ground = ground or ledger.ground
@@ -757,6 +865,11 @@ class OnboardingRitual:
         self.qlog = QuestionLog(ledger, self.ground)
         self.scout = scout or TermScout(seed_terms=seed_terms)
         self.loops = LoopRegistry(ledger, self.ground)
+        # the check-in discussion channel: when an Outbox + an armed target are
+        # supplied, a digest of NEW learnings is STAGED for the human (it posts
+        # only after their ✅ — stage-don't-fire holds for check-ins too).
+        self.outbox = outbox
+        self.checkin_target = checkin_target
 
     # ----- the pass ----------------------------------------------------------
 
@@ -815,19 +928,97 @@ class OnboardingRitual:
                                            self.author, self.ground)
             summary["terms_minted"] = [term_from_assumption(m.body.get("assumption", ""))
                                        for m in minted]
+            # a long-quiet voice becomes an open QUESTION about presence —
+            # asked, never assumed (the temporal-wave discipline, applied to who).
+            summary["presence_questions"] = [
+                q.body.get("title") for q in
+                mint_presence_curiosities(self.ledger, self.qlog,
+                                          self.author, self.ground)]
 
+            from .verify import contested_items
+            contested_before = len(contested_items(self.ledger))
             summary.update(self._pursue_terms(max_terms))
+            new_contested = len(contested_items(self.ledger)) - contested_before
 
             summary["map_files"] = write_map_overview(
                 self.ledger, self.workspace, self.registry, self.qlog,
                 self.author, self.ground)
             summary["open_unknowns"] = len(self.qlog.open_questions())
+            summary["comprehension"] = comprehension(self.ledger)
+
+            self._write_checkin(summary, new_contested)
 
             entry = self._record_pass(summary, now)
             run.ok(f"mapped: {len(summary['terms_pursued'])} term(s) pursued, "
                    f"{summary['open_unknowns']} unknown(s) on the record",
                    evidence=[entry.id])
         return summary
+
+    # ----- the check-in: bring the learnings TO the human -------------------
+
+    def _render_checkin(self, summary: dict, new_contested: int) -> str:
+        comp = summary.get("comprehension") or {}
+        day = self.ground.now().date().isoformat()
+        lines = [f"# Check-in — {day}", "",
+                 "_What I learned, what I'm unsure of, and what I need from "
+                 "you. This folds per day; the ledger keeps every version._",
+                 ""]
+        lines.append("## Pursued this pass")
+        for p in summary.get("terms_pursued") or []:
+            lines.append(f"- '{p['term']}' — {p['outcome']}")
+        if not summary.get("terms_pursued"):
+            lines.append("- (nothing pursued this pass)")
+        if summary.get("terms_resolved"):
+            lines.append("\n## Newly settled (verified or confirmed)")
+            lines += [f"- {t}" for t in summary["terms_resolved"]]
+        if new_contested:
+            lines.append(f"\n## Contested — needs your eyes")
+            lines.append(f"- {new_contested} reading(s) were REFUTED by the "
+                         "independent panel and are escalated on the portal")
+        if summary.get("presence_questions"):
+            lines.append("\n## Presence questions (asked, not assumed)")
+            lines += [f"- {t}" for t in summary["presence_questions"]]
+        stale = self.qlog.stale()[:5]
+        if stale:
+            lines.append("\n## Overdue curiosities (help me close these)")
+            lines += [f"- {q.body.get('title')}" for q in stale]
+        lines.append("\n## Where understanding actually stands")
+        lines.append(f"- walked {comp.get('walked', 0)} of "
+                     f"{comp.get('ingested', 0)} ingested items "
+                     f"({comp.get('pct_walked', 0)}%) · "
+                     f"{comp.get('terms_known', 0)} meaning(s) known, "
+                     f"{comp.get('terms_open', 0)} open")
+        lines.append("- this is meant to take many sessions — tell me what is "
+                     "right, what is incorrect, and what is wrong, and I will "
+                     "fold it in.")
+        return "\n".join(lines)
+
+    def _write_checkin(self, summary: dict, new_contested: int) -> None:
+        """The discussion surface: a per-day check-in note in the map (folds —
+        the day's latest state, every version on the ledger), plus a STAGED
+        Discord digest when something genuinely settled or broke — so the
+        conversation comes to the human instead of waiting to be found."""
+        text = self._render_checkin(summary, new_contested)
+        day = self.ground.now().date().isoformat()
+        self.workspace.write(
+            f"map/checkins/{day}.md", text, author=self.author,
+            title=f"Check-in {day}: learnings, contested items, open asks",
+            synthesis_justification=(
+                "the day's folded conversation surface — what settled, what "
+                "broke, what needs the human — exists nowhere else as one note"))
+        summary["checkin"] = f"map/checkins/{day}.md"
+        if (self.outbox is not None and self.checkin_target
+                and (summary.get("terms_resolved") or new_contested)):
+            from .stage import StagedAction
+            from .surfaces import ConversationKey, Surface
+            aid = self.outbox.stage(StagedAction(
+                kind="discord_post", target=self.checkin_target,
+                content=text[:1800], created_by=self.author,
+                destination=ConversationKey(agent="trellis",
+                                            surface=Surface.CHANNEL,
+                                            scope=self.checkin_target,
+                                            human="")))
+            summary["checkin_staged"] = aid
 
     def _pursue_terms(self, max_terms: int) -> dict:
         """Pursue a few open term-curiosities with real agency: trace lineage
