@@ -21,13 +21,20 @@ class ConfigError(Exception):
     """A required configuration value is missing or malformed."""
 
 
-def load_dotenv(path: "str | Path" = ".env", *, override: bool = False) -> dict:
+def load_dotenv(path: "str | Path | None" = None, *, override: bool = False) -> dict:
     """Load KEY=VALUE lines from a .env into os.environ if the file exists.
 
     Missing file → {} (not an error: env may be set another way). Existing
     os.environ values are NOT overwritten unless override=True. Supports
     `export KEY=val`, `#` comments, and single/double-quoted values.
+
+    The path defaults to `$TRELLIS_ENV_FILE` (or `.env`). Overriding it lets a
+    caller point at a different file — and lets the TEST SUITE point at a
+    nonexistent one, so a developer's real `.env` can never leak into and change
+    test outcomes (that leak once turned every login test into a 422).
     """
+    if path is None:
+        path = os.environ.get("TRELLIS_ENV_FILE", ".env")
     p = Path(path)
     parsed: dict[str, str] = {}
     if not p.is_file():

@@ -30,6 +30,18 @@ def test_load_dotenv_missing_file_is_empty(tmp_path):
     assert config.load_dotenv(tmp_path / "nope.env") == {}
 
 
+def test_load_dotenv_honors_TRELLIS_ENV_FILE_override(tmp_path, monkeypatch):
+    # A caller (and the test suite) can redirect the default path so a real ./.env
+    # is never picked up — the isolation that keeps a developer's local config
+    # from silently changing behavior (it once turned every login test into a 422).
+    real = tmp_path / "real.env"
+    real.write_text("TRELLIS_FROM_REAL=yes\n", encoding="utf-8")
+    monkeypatch.setenv("TRELLIS_ENV_FILE", str(tmp_path / "does-not-exist.env"))
+    monkeypatch.delenv("TRELLIS_FROM_REAL", raising=False)
+    assert config.load_dotenv() == {}                 # default path → the override → nothing
+    assert config.load_dotenv(real) == {"TRELLIS_FROM_REAL": "yes"}   # explicit path still works
+
+
 def test_require_fails_loud(monkeypatch):
     monkeypatch.delenv("TRELLIS_NOPE", raising=False)
     with pytest.raises(config.ConfigError, match="TRELLIS_NOPE"):
