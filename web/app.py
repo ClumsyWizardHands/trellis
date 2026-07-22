@@ -71,6 +71,9 @@ async def _friendly_auth_redirect(request: Request, exc: HTTPException):
     401s redirect; every other error keeps its honest JSON."""
     from fastapi.responses import JSONResponse
     if exc.status_code == 401:
+        # a failed LOGIN must say so, not silently re-show the form
+        if request.url.path == "/login":
+            return RedirectResponse("/login?bad=1", status_code=303)
         return RedirectResponse("/login", status_code=303)
     return JSONResponse({"detail": exc.detail}, status_code=exc.status_code)
 
@@ -1022,8 +1025,12 @@ def login_form(request: Request):
         return _shell("/", f'{_pagehead("Signed in", f"You are signed in as {esc(who.id)}.")}'
                       '<div class="panel"><form method="post" action="/logout">'
                       '<button class="deny">sign out</button></form></div>')
-    body = (f'{_pagehead("Sign in", "Approvals are the human seat — they must be authenticated, not typed in. Enter the approver token (printed to the console the server was started from).")}'
-            '<div class="panel"><form method="post" action="/login" style="display:flex;gap:8px;align-items:center">'
+    bad = ('<div class="attn small" style="margin-bottom:8px">✗ that token was '
+           'not right — try again</div>'
+           if request.query_params.get("bad") else "")
+    body = (f'{_pagehead("Sign in", "Approvals are the human seat — they must be authenticated, not typed in. Your token is TRELLIS_APPROVER_SECRET in the repo .env (or the console line printed at server start).")}'
+            f'<div class="panel">{bad}'
+            '<form method="post" action="/login" style="display:flex;gap:8px;align-items:center">'
             '<input name="token" type="password" placeholder="approver token" required autofocus>'
             '<button>sign in</button></form></div>')
     return _shell("/", body)

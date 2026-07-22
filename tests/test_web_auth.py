@@ -23,13 +23,15 @@ def _client_with_staged_action(tmp_path):
 def test_approve_without_a_session_is_401(tmp_path):
     client, webapp, aid = _client_with_staged_action(tmp_path)
     r = client.post("/approve", data={"action_id": aid}, follow_redirects=False)
-    assert r.status_code == 401                       # no form-field authority
+    # no form-field authority: the write is refused; the human is sent to sign in
+    assert r.status_code == 303 and r.headers["location"] == "/login"
 
 
 def test_login_then_approve_records_the_authenticated_id(tmp_path):
     client, webapp, aid = _client_with_staged_action(tmp_path)
     # wrong token → 401
-    assert client.post("/login", data={"token": "wrong"}, follow_redirects=False).status_code == 401
+    r = client.post("/login", data={"token": "wrong"}, follow_redirects=False)
+    assert r.status_code == 303 and r.headers["location"] == "/login?bad=1"
     # right token (the server's ephemeral login token) → session cookie
     r = client.post("/login", data={"token": webapp._LOGIN_TOKEN}, follow_redirects=False)
     assert r.status_code == 303
@@ -46,4 +48,13 @@ def test_a_forged_session_cookie_is_rejected(tmp_path):
     client, webapp, aid = _client_with_staged_action(tmp_path)
     client.cookies.set(webapp.SESSION_COOKIE, "bWFsbG9yeS45OTk5.deadbeefdeadbeefdeadbeefdeadbeef")
     r = client.post("/approve", data={"action_id": aid}, follow_redirects=False)
-    assert r.status_code == 401                       # tamper → not authenticated
+    # tamper → NOT authenticated: the write is refused and the browser is sent
+    # to /login (the 401 now travels as a friendly redirect, same refusal)
+    assert r.status_code == 303
+    assert r.headers["location"] == "/login"
+    # and the action was NOT approved — the refusal is real, not cosmetic
+    from trellis.stage import ActionStatus, Outbox
+    from trellis.ledger import Ledger
+    led = Ledger(tmp_path / "state" / "ledger.jsonl")
+    assert not any(e.body.get("status") == "approved"
+                   for e in led.entries() if e.kind == "staged_action")
