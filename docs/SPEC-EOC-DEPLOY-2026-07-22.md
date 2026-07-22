@@ -18,6 +18,10 @@ the CLI). Everything else is credentials, human steps, or post-launch.
 - Clock, said loudly: the in-call commitment was repo-update EOD 07-21 and
   Discord deploy by 12:00 CT 07-22. The repo update lands with this PR — behind
   the committed mark. The deploy runbook below is built for same-day execution.
+- Amended same morning (Clare's updates, 07-22): Alex has already stood the
+  trellis bot up in the Alliance of Empires server, and Clare + Sarah hold
+  Brett's OAuth via the custody profile and can share it with Alex as the
+  agent's owner. C2, C4, C6, D48, R1, and the runbook reflect both.
 
 ---
 
@@ -52,11 +56,13 @@ purpose-built to the *no-self-verify / trace-test* principle. The 4-way audit
 stays available as a post-launch T if the experiment disappoints — the
 experiment IS its first data point.
 
-**C2 — where it runs → T (Clare+Alex decide today), default: Clare's machine.**
-Repo doctrine D37: always-on *with a machine*, not a server. The EMP's
-*custody* means points at the Sarah custody-spec pattern (a chief's machine
-holding a Brett-delegated grant). Default: Clare's machine for the experiment
-window — she is deploying, approving, and holding the EMP; migration later is
+**C2 — where it runs → resolved by events: Alex's machine, Alex owns.**
+Repo doctrine D37: always-on *with a machine*, not a server. Alex stood the
+bot up in the Alliance of Empires server, so he owns and hosts the agent —
+which also fits the custody-spec pattern (a chief's machine holding a
+Brett-delegated grant; Clare/Sarah share the custody profile with him, C6).
+Clare stays **approver**: owner ≠ approver keeps a human cross-check on the
+agent's sends, the same shape as maker ≠ verifier. Migration later stays
 cheap because state is one ledger file.
 
 **C3/C10 — model seat → T (default: Codex maker + Haiku verifier).** The repo
@@ -73,8 +79,11 @@ either way). Swapping seats later is a .env change, which is the point.
 
 **C4 — Discord scope → Y, answered in code.** D40: read scope = exactly what
 the bot's own identity can see; grant is edited in Discord, not config. Launch
-posture: invite the trellis-owned bot (D30 — never reuse another agent's
-token) to **one private channel**; `TRELLIS_ACT_SURFACES` **empty** on first
+posture: the trellis-owned bot (D30 — never reuse another agent's token) is
+**already in the Alliance of Empires server** (Alex, 07-22 AM) — scope it to
+**one private channel** there via Discord channel permissions; other agents
+(Moro) live in that server, and D30's own-bot/own-token rule is exactly what
+keeps the identities separate. `TRELLIS_ACT_SURFACES` **empty** on first
 run; `TRELLIS_APPROVER_DISCORD_ID` = Clare for the experiment. The EMP's
 *pass-before-irreversible* is structurally enforced: stage-don't-fire outbox,
 ✅-reaction approval, executor that refuses when un-armed.
@@ -90,9 +99,18 @@ docs+text** (delegated OAuth grant flow, folder allowlist, shared-drive
 support landed 07-21) — **no Gmail, no Calendar**. So launch honestly: the
 experiment demonstrates the trust architecture on Discord + granted Drive
 folders; **Gmail/Calendar read adapters are roadmap phase R1**, not silently
-implied. Brett's OAuth itself is supported exactly as wanted: he approves in
-his own browser (`trellis google grant`), token store held read-only, trellis
-never touches the raw secret, revocable by him.
+implied. Custody update (Clare, 07-22): Clare and Sarah already hold Brett's
+OAuth via the custody profile and can share it with Alex as the agent's owner
+— so no step waits on Brett's calendar. The distinction that keeps this clean:
+the custody profile is the *human's* credential (full workspace, as Brett);
+the *agent's* credential should still be minted through `trellis google grant`
+run under that profile on the deployment machine — least-privilege
+(`drive.readonly`, named folders only), token store held read-only, ledgered,
+revocable — never the custody credential handed to the agent wholesale. The
+custody share unlocks the full suite exactly as fast as the R1 adapters land:
+scope widens adapter-by-adapter, re-asking consent each time (D41's posture
+when D40 scope widens). Acting as Brett is where pass-before-irreversible
+binds hardest.
 
 **C7 — what to SHOW to rebuild trust → Y, the repo's whole thesis.** The
 showable objects exist: the dated ledger (append-only, authored, bitemporal),
@@ -145,9 +163,10 @@ for Alex's hands or a reviewed follow-up commit — his call tomorrow morning.
 - **D47 (proposal)** — Launch scope is honest: Discord (one private channel,
   read) + granted Drive folders. Gmail/Calendar are roadmap R1, and nobody
   presents the agent as having workspace access it doesn't have.
-- **D48 (proposal)** — Seats at launch: maker = Codex (ChatGPT subscription),
-  verifier = Claude Haiku; approver = Clare. Any seat swap is a .env change +
-  a ledger note, not a rebuild.
+- **D48 (proposal)** — Seats and roles at launch: maker = Codex (ChatGPT
+  subscription), verifier = Claude Haiku; **owner/host = Alex, approver =
+  Clare** — owner ≠ approver keeps a human cross-check on the agent's sends.
+  Any seat swap is a .env change + a ledger note, not a rebuild.
 - **D44 (endorse + sketch)** — Wire the witness cycle from the CLI. Sketch:
   `cli.py` `cmd_run`/`cmd_tick` currently pass `handlers={}` (cli.py:493,
   516) while `Runner.DEFAULT_SCHEDULES` (runner.py:352) registers
@@ -170,9 +189,10 @@ on `begin` and wire this week); Alex looks for the C9 harvest.
 
 **R1 — launch (today, target 12:00 CT — runbook §5):** private channel live,
 consent ritual, backfill, EMP-grounded learning loop; first staged send
-approved with ✅ in front of human eyes. Then: Brett runs
-`trellis google grant` (~10 min with him, can land after noon — say so rather
-than slip silently) and names the granted folders.
+approved with ✅ in front of human eyes. Then: the Google grant — Clare/Sarah
+share the Brett custody profile with Alex, who runs `trellis google grant`
+under it on the deployment machine and names the granted folders (can land
+after noon — say so rather than slip silently).
 
 **R2 — this week:** D44 live if not at launch; Gmail + Calendar read adapters
 (the C6 gap — extends `sources.py`/`google_source.py` patterns, same
@@ -189,10 +209,12 @@ outside this org).
 
 ## 5 · Launch runbook (same-day)
 
-Human-only steps (Clare, ~15 min): create the trellis-owned Discord bot
-(GO-LIVE-CHECKLIST §6 — Public Bot off, Message Content + Server Members
-intents), invite it to one new private channel, copy the guild/channel/user
-ids. Then:
+Human-only steps: the bot already exists and sits in the Alliance of Empires
+server (Alex, 07-22 AM — per GO-LIVE-CHECKLIST §6 confirm Public Bot is off
+and Message Content + Server Members intents are on). Remaining: create/choose
+the one private channel and restrict the bot to it via channel permissions
+(Alex), copy the guild/channel/user ids, and share the Brett custody profile
+with Alex (Clare/Sarah). Then, on Alex's machine:
 
 1. `pip install -e .` → `trellis init` → `trellis doctor` → `trellis demo`
 2. `.env`: bot token · guild id · `TRELLIS_ACT_SURFACES=` (empty) · approver
@@ -203,8 +225,9 @@ ids. Then:
    and the ledger
 4. When the read loop looks right: add the one channel to
    `TRELLIS_ACT_SURFACES`, arm the executor, stage one send, approve with ✅
-5. Brett's OAuth: `trellis google grant` on the deployment machine under
-   Brett's account, `TRELLIS_DRIVE_FOLDER=<his named folder ids>`
+5. Brett's OAuth: Alex runs `trellis google grant` on the deployment machine
+   under the shared Brett custody profile,
+   `TRELLIS_DRIVE_FOLDER=<the named folder ids>`
 6. `trellis confirm "<term>" "<meaning>"` as terms surface (start with:
    empire, EMP, 00-grade, Y/N/T, DAP, sapling)
 
