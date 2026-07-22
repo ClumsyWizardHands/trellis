@@ -64,6 +64,17 @@ def _principal(request: Request) -> "Principal | None":
     return _AUTH.verify_session(request.cookies.get(SESSION_COOKIE))
 
 
+@app.exception_handler(HTTPException)
+async def _friendly_auth_redirect(request: Request, exc: HTTPException):
+    """A signed-out human clicking a Y/N/T button must land on the LOGIN page,
+    not a black screen of raw JSON (Alex hit exactly that, 2026-07-22). Only
+    401s redirect; every other error keeps its honest JSON."""
+    from fastapi.responses import JSONResponse
+    if exc.status_code == 401:
+        return RedirectResponse("/login", status_code=303)
+    return JSONResponse({"detail": exc.detail}, status_code=exc.status_code)
+
+
 def _require_human(request: Request) -> str:
     """The canonical id of the authenticated approver, or 401. This replaces the
     old caller-supplied `human` form field: authority is now server-verified.
