@@ -197,8 +197,29 @@ margin-right:.35em;opacity:.35;transition:opacity .2s}}
   var txt = document.getElementById('livetxt');
   var last = Date.now();
   var busy = false;
+  var deferred = false;
+  function typing() {{
+    /* NEVER swap the page out from under a human mid-form: a tick used to
+       rebuild the section while a note was being typed, wiping it (Alex hit
+       this on the Assumptions tab). Focus in a form control, or any non-empty
+       input, holds the refresh; it applies after the form is left. */
+    var a = document.activeElement;
+    if (a && live.contains(a) &&
+        (a.tagName === 'INPUT' || a.tagName === 'TEXTAREA' ||
+         a.tagName === 'SELECT')) return true;
+    var inputs = live.querySelectorAll('input[type="text"], input:not([type]), textarea');
+    for (var i = 0; i < inputs.length; i++) {{
+      if (inputs[i].value && inputs[i].value.trim()) return true;
+    }}
+    return false;
+  }}
   function refresh() {{
     if (busy) return;
+    if (typing()) {{
+      deferred = true;
+      txt.textContent = 'live · paused while you type';
+      return;
+    }}
     busy = true;
     fetch(live.dataset.frag, {{credentials: 'same-origin'}})
       .then(function (r) {{ return r.ok ? r.text() : null; }})
@@ -215,7 +236,13 @@ margin-right:.35em;opacity:.35;transition:opacity .2s}}
   }}
   var es = new EventSource('/stream');
   es.addEventListener('tick', refresh);
+  document.addEventListener('focusout', function () {{
+    setTimeout(function () {{
+      if (deferred && !typing()) {{ deferred = false; refresh(); }}
+    }}, 200);
+  }});
   setInterval(function () {{
+    if (typing()) {{ txt.textContent = 'live · paused while you type'; return; }}
     txt.textContent = 'live · updated ' + Math.round((Date.now() - last) / 1000) + 's ago';
   }}, 1000);
 }})();
