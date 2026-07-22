@@ -26,7 +26,7 @@ from typing import Optional
 from .base import Provider, ProviderUnavailable
 from .mock import MockProvider
 
-VALID = ("mock", "local", "openai", "claude")
+VALID = ("mock", "local", "openai", "claude", "codex")
 
 #: same family, cheaper seat (D34): the verifier defaults to a Haiku-class model
 #: on the same backend as the Opus-class maker.
@@ -89,6 +89,14 @@ def provider_from_env() -> Provider:
         model = os.environ.get("TRELLIS_CLAUDE_MODEL", "claude-sonnet-4-5")
         return ClaudeSDKProvider(model=model)
 
+    if kind == "codex":
+        # OpenAI on your ChatGPT SUBSCRIPTION via the official Codex CLI (no API
+        # key). CodexProvider.__init__ raises if `codex` isn't installed; its
+        # preflight detects `codex login`. trellis never handles the credential.
+        from .codex import CodexProvider
+        model = os.environ.get("TRELLIS_CODEX_MODEL", "").strip() or None
+        return CodexProvider(model=model)
+
     raise ProviderUnavailable(
         f"unknown TRELLIS_PROVIDER={kind!r}. Valid: {', '.join(VALID)}.")
 
@@ -122,6 +130,10 @@ def _build_verifier_seat(kind: str, model: str) -> Provider:
     if kind == "claude":
         from .claude_sdk import ClaudeSDKProvider
         return ClaudeSDKProvider(model=model or _VERIFIER_DEFAULT_MODEL["claude"])
+
+    if kind == "codex":
+        from .codex import CodexProvider
+        return CodexProvider(model=model or None)
 
     raise ProviderUnavailable(
         f"unknown TRELLIS_VERIFIER_PROVIDER={kind!r}. Valid: {', '.join(VALID)}.")

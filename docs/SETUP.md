@@ -44,6 +44,7 @@ Set `TRELLIS_PROVIDER` in `.env` to **one** of:
 | `local` | any OpenAI-compatible endpoint — **Gemma via Ollama**, LM Studio, llama.cpp, vLLM | `TRELLIS_LOCAL_BASE_URL`, `TRELLIS_LOCAL_MODEL` | core (stdlib) |
 | `openai` | hosted OpenAI | `OPENAI_API_KEY`, `TRELLIS_OPENAI_MODEL` | core (stdlib) |
 | `claude` | Claude Agent SDK | your **Claude Max subscription** (`claude login`) *or* `ANTHROPIC_API_KEY` | `pip install -e '.[claude]'` |
+| `codex` | official OpenAI **Codex CLI** | your **ChatGPT subscription** (`codex login`) — no API key | install the Codex CLI |
 
 Local Gemma example: run `ollama serve`, `ollama pull gemma3`, then set
 `TRELLIS_PROVIDER=local`, `TRELLIS_LOCAL_BASE_URL=http://localhost:11434/v1`,
@@ -60,7 +61,16 @@ Local Gemma example: run `ollama serve`, `ollama pull gemma3`, then set
 >
 > `trellis doctor` reports which credential the seat will use and refuses READY only when it
 > finds none. An `ANTHROPIC_API_KEY`, if set, takes precedence (per-token API billing).
-> *(OpenAI's "Max"/ChatGPT subscription login is still not wired — API key or local for that.)*
+
+> **Run OpenAI on your ChatGPT subscription (no API key)** — set `TRELLIS_PROVIDER=codex`.
+> trellis shells out to OpenAI's **official Codex CLI** (the way the `local` seat shells out
+> to Ollama); Codex owns the login and credential, trellis never touches them. Sign in once:
+> - **Interactive:** `codex login` (Sign in with ChatGPT — uses your Plus/Pro subscription)
+> - **Headless:** `codex login --device-auth`
+> - **API key instead:** `printenv OPENAI_API_KEY | codex login --with-api-key`
+>
+> Caveat: Codex is a coding *agent*, not a bare chat model — heavier and more tool-shaped
+> than the other seats. It is the honest path to "use my OpenAI subscription without a key".
 
 ## Connect surfaces (all optional, all independent)
 
