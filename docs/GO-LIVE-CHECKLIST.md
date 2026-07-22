@@ -1,6 +1,6 @@
 # Go-live checklist — wiring the code-complete trellis to your Discord
 
-Everything is built, tested (535 tests, 10/10 stress), and committed on the
+Everything is built, tested (541 tests, 10/10 stress), and committed on the
 `go-live-hardening` branch. What remains is not code — it is the credentials and
 ids only you can provision, plus two small arming steps. This is the honest gap
 between "the harness works" and "it is watching your server."
@@ -42,10 +42,9 @@ between "the harness works" and "it is watching your server."
 
 ## 4. One open design call
 
-The **/sessions** portal page shows DM content and currently follows the portal's
-"reads are open, writes gated" posture (it runs on your localhost). Decide whether
-that page specifically should sit behind your login even locally — say the word and
-it's gated.
+**Resolved (Alex, 2026-07-21):** the **/sessions** page shows DM content, so it is
+owner-only even on localhost — an unauthenticated GET redirects to `/login`. The
+other comprehension pages stay open.
 
 ## 5. Suggested first live hour (still fully safe)
 
@@ -55,3 +54,42 @@ it's gated.
    threading, and DM-scoping look right on real traffic.
 3. When you trust what you see, add one channel to `TRELLIS_ACT_SURFACES`, arm the
    executor, and try one staged send — approve it with a ✅ in Discord.
+
+## 6. Walkthrough — creating the trellis Discord bot + gathering the ids
+
+The safety-critical logic (approval mapping, guards, "only your reaction counts")
+is built and tested; these steps just gather what only you can create.
+
+**A. Create the bot**
+1. https://discord.com/developers/applications → **New Application**, name it `trellis`.
+2. Left sidebar → **Bot** → **Reset Token** → copy → this is **`TRELLIS_DISCORD_TOKEN`**
+   (treat it like a password).
+3. On the Bot page, enable the **Message Content Intent** and **Server Members Intent**
+   under *Privileged Gateway Intents*; save.
+
+**B. Invite it to your server**
+4. **OAuth2 → URL Generator** → Scopes: `bot`; Bot Permissions: View Channels, Read
+   Message History, Send Messages, Send Messages in Threads, Add Reactions.
+5. Open the generated URL, pick your server, **Authorize**.
+
+**C. Get the ids** (Discord → *Settings → Advanced → Developer Mode: ON*)
+6. Right-click a channel → **Copy Channel ID** → **`TRELLIS_READ_SURFACES`** (watch)
+   and **`TRELLIS_ACT_SURFACES`** (post — leave EMPTY for the first read-only run).
+7. Right-click your own name → **Copy User ID** → **`TRELLIS_APPROVER_DISCORD_ID`**
+   (only your reaction approves a send).
+
+**D. Model seats** — `TRELLIS_PROVIDER` (+ key) for the Opus maker; `TRELLIS_VERIFIER_PROVIDER`
+/ `TRELLIS_VERIFIER_MODEL` for the Haiku verifier.
+
+Put them in `.env`, then run `trellis doctor` (it reports honestly what's still unset)
+and `trellis discord` (it prints exactly which vars it needs).
+
+### The remaining live plumbing (a small final mile, not another build)
+
+Two seams are deliberately scaffolded because they can only be finished and tested
+against the real bot your token creates:
+- the **gateway socket** that receives your ✅ reactions (`DiscordGatewayConnection`);
+- the **stdlib-urllib send** that posts a message (the `_urllib_sender` in
+  `trellis discord`, and the DM-channel-open path in `executor.urllib_discord_sender`).
+Once the token exists, finishing these + an end-to-end read-only test on your server
+is the last step before it is live.
