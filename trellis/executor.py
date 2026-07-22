@@ -33,13 +33,13 @@ an ambiguous send into a false success.
 
 from __future__ import annotations
 
-import json
 from typing import Callable, Optional
 
 from typing import TYPE_CHECKING
 
 from .isolation import Isolation
 from .stage import ActionStatus, Outbox, StagedAction, act_surface_id
+from .surfaces import Surface
 
 if TYPE_CHECKING:
     from .ledger import Ledger
@@ -128,37 +128,54 @@ class DiscordExecutor:
                 "idempotency_key": action.idempotency_key, "response": response}
 
 
+def _is_dm_action(action: StagedAction) -> bool:
+    """True when this action's destination is a private DM (Surface.DM). A DM is
+    addressed by the OWNER's user id (the stable, allowlistable surface); the
+    dynamic DM channel id is resolved at send time via `open_dm`, mirroring the
+    channel⇒threads rule on the act side (D30/D32)."""
+    dest = action.destination
+    return dest is not None and dest.surface == Surface.DM
+
+
 def urllib_discord_sender(iso: Isolation, api_base: str = "https://discord.com/api/v10",
-                          urlopen: Optional[Callable] = None) -> Callable[[StagedAction], dict]:
-    """Build a production `send_fn` that POSTs to the Discord API with the stdlib
-    only (D11 — no third-party HTTP client). The trellis bot credential is fetched
-    on demand from its env var (D30 — never stored, never logged) and the send is
-    idempotency-keyed via the Discord `X-Idempotency-Key`-style nonce where the
-    destination honours it (D26 — trellis guarantees fire-at-most-once; a remote
-    that dedups gives true exactly-once).
+                          urlopen: Optional[Callable] = None,
+                          client: Optional[object] = None) -> Callable[[StagedAction], dict]:
+    """Build a production `send_fn` that POSTs an approved action's content to its
+    target surface via the stdlib-only `DiscordClient` (D11 — no third-party HTTP
+    client). The trellis bot credential is fetched on demand from its env var by the
+    client (D30 — never stored, never logged, never in an exception string) and the
+    send carries the action's idempotency key as the Discord `nonce`, so a remote
+    that dedups turns trellis's fire-at-most-once into true exactly-once (D26).
 
-    `urlopen` is injectable purely so this transport itself stays testable without
-    the network; production leaves it None and uses `urllib.request.urlopen`. The
-    executor's DEFAULT transport is still None — this must be wired in explicitly,
-    so nothing posts to Discord until a human arms it.
+    Surface resolution mirrors the guard (`act_surface_id`) so the surface SENT to is
+    exactly the surface GUARDED:
+      * a channel/thread action posts to `act_surface_id(action)` (the parent channel
+        for a threaded reply, D32);
+      * a Surface.DM action's surface is the owner's user id — allowlisted as such —
+        which is resolved to a concrete DM channel via `open_dm(user_id)` FIRST, then
+        posted to. The user id is what `guard_act` already admitted upstream.
+
+    `urlopen` is injectable purely so this transport stays testable without the
+    network; production leaves it None and the client uses `urllib.request.urlopen`.
+    `client` is injectable for tests (a mock DiscordClient); production leaves it None
+    and one is constructed from `iso.identity`. The executor's DEFAULT transport is
+    still None — this must be wired in explicitly, so nothing posts to Discord until a
+    human arms it. The bot token never appears in the return value or any raised error.
     """
-    import urllib.request  # stdlib only, imported lazily so importing this module never needs the net
+    from .discord_api import DiscordClient  # stdlib-only client; imported lazily (no net on import)
 
-    opener = urlopen or urllib.request.urlopen
+    dc = client if client is not None else DiscordClient(
+        identity_or_token_env=iso.identity, urlopen=urlopen, api_base=api_base)
 
     def send(action: StagedAction) -> dict:
-        token = iso.identity.credential()  # fails loud if unset — no credential laddering
-        channel_id = _act_surface_id(action)
-        url = f"{api_base}/channels/{channel_id}/messages"
-        body = json.dumps({"content": action.content,
-                           "nonce": action.idempotency_key}).encode("utf-8")
-        req = urllib.request.Request(
-            url, data=body, method="POST",
-            headers={"Authorization": f"Bot {token}",
-                     "Content-Type": "application/json",
-                     "User-Agent": "trellis (https://github.com/, 1.0)"})
-        with opener(req, timeout=15) as resp:
-            raw = resp.read().decode("utf-8") or "{}"
-        return json.loads(raw)
+        surface = _act_surface_id(action)          # the guarded surface == the sent surface
+        if _is_dm_action(action):
+            # a DM is addressed by the owner's user id (allowlisted); resolve it to a
+            # concrete DM channel id first, then post there.
+            channel_id = dc.open_dm(surface)
+        else:
+            channel_id = surface
+        # the idempotency key rides as the nonce (fire-at-most-once → exactly-once)
+        return dc.post_message(channel_id, action.content, nonce=action.idempotency_key)
 
     return send

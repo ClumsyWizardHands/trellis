@@ -130,7 +130,7 @@ def cmd_doctor(args: argparse.Namespace) -> int:
                    f"UNVERIFIED — {len(reads)} allowlisted surface(s); token not "
                    "validated (no reachability check built)")
         if acts:
-            r.line("WARN", "Discord ACT", f"ARMED to send to {len(acts)} surface(s) — send path is unbuilt; keep empty unless intended")
+            r.line("WARN", "Discord ACT", f"ARMED to send to {len(acts)} surface(s) — every send still stages for the owner's approval (refusal #5); keep empty unless intended")
 
     # --- portal auth ---
     if os.environ.get("TRELLIS_APPROVER_SECRET", "").strip():
@@ -404,6 +404,31 @@ def _build_runner():
     return Runner(ledger, budget=budget)
 
 
+def _discord_client_from_env(iso=None, urlopen=None):
+    """Construct the stdlib-only DiscordClient from env when a bot token is set, else
+    None. Returning None is the 'Discord not configured — stay inert' signal the
+    runner's poll step branches on: no token, no polling, no bytes on the wire. The
+    token is fetched on demand by the client (never here, never logged)."""
+    if not os.environ.get("TRELLIS_DISCORD_TOKEN", "").strip():
+        return None
+    from .isolation import Isolation
+    from .discord_api import DiscordClient
+    iso = iso or Isolation.from_env()
+    return DiscordClient(identity_or_token_env=iso.identity, urlopen=urlopen)
+
+
+def _run_runner(runner, client, cadence) -> None:  # pragma: no cover - interactive loop
+    """Drive the always-on loop, forwarding a configured DiscordClient to the runner's
+    poll step ONLY if this runner build accepts it (feature-detected on `run`'s
+    signature). Forward-compatible: until the Stage-2 poll unit adds `poll_client`,
+    this is a no-op; once it does, `trellis run` polls Discord each tick."""
+    import inspect
+    kwargs = {"handlers": {}, "cadence": cadence}
+    if client is not None and "poll_client" in inspect.signature(runner.run).parameters:
+        kwargs["poll_client"] = client
+    runner.run(**kwargs)
+
+
 def _print_health(runner) -> None:
     h = runner.health()
     orphans = h["orphan_starts"]
@@ -442,14 +467,22 @@ def cmd_run(args: argparse.Namespace) -> int:
     config.load_dotenv()
     from datetime import timedelta
 
+    from .isolation import Isolation
     from .runner import default_cadence
     runner = _build_runner()
     cadence = (timedelta(seconds=args.every) if getattr(args, "every", None)
                else default_cadence())
+    # When Discord is configured, construct the client from env and hand it to the
+    # runner's poll step (Stage-2). Unconfigured → None → the runner stays offline.
+    iso = Isolation.from_env()
+    client = _discord_client_from_env(iso)
+    if client is not None:
+        print(f"  · Discord poll wired ({len(iso.allow.read)} read surface(s)); "
+              "every send still stages for the owner's ✅")
     print(f"trellis run — always-on while this process lives; tick every "
           f"{cadence.total_seconds():.0f}s (Ctrl-C to stop)")
     try:
-        runner.run(handlers={}, cadence=cadence)
+        _run_runner(runner, client, cadence)
     except KeyboardInterrupt:  # pragma: no cover - interactive
         print("\nstopped.")
     return 0
@@ -469,8 +502,8 @@ def cmd_discord(args: argparse.Namespace) -> int:
     from .ledger import Ledger
     from .registry import IdentityRegistry
     from .stage import Outbox
-    from .discord_gateway import (ApprovalGateway, DiscordGatewayConnection,
-                                  make_discord_send_executor)
+    from .executor import DiscordExecutor, urllib_discord_sender
+    from .discord_gateway import ApprovalGateway, DiscordGatewayConnection
 
     token = os.environ.get("TRELLIS_DISCORD_TOKEN", "").strip()
     owner = os.environ.get("TRELLIS_APPROVER_DISCORD_ID", "").strip()
@@ -494,27 +527,27 @@ def cmd_discord(args: argparse.Namespace) -> int:
               file=sys.stderr)
         return 1
 
-    # Construct the gateway (no network here). The send path is guard_act-gated
-    # (D30); the live socket is injected by the operator, so production supplies a
-    # real urllib `sender` — never in tests.
+    # Construct the gateway (no network here — a DiscordClient touches the wire only
+    # at send/poll time). The executor is the hardened DiscordExecutor: it re-checks
+    # the ledger for a durable APPROVED before any byte leaves (defense in depth on
+    # refusal #5), guards the act surface (D30), then posts via the stdlib-only
+    # DiscordClient — resolving a Surface.DM to a channel via open_dm first.
     ledger = Ledger(config.ledger_path())
     outbox = Outbox(ledger)
     registry = IdentityRegistry(ledger)
 
-    def _urllib_sender(action, surface):  # pragma: no cover - production network path
-        raise NotImplementedError(
-            "wire the production stdlib-urllib Discord send here (POST to the "
-            "channel/thread `surface`); it is the only place bytes leave the machine, "
-            "and it is reached only AFTER guard_act has allowlisted the surface.")
-
-    executor = make_discord_send_executor(iso, sender=_urllib_sender)
+    # The real, DiscordClient-backed send transport. Built here, never in tests; it
+    # posts nothing until reached through approve→fire AND past guard_act + the
+    # ledger-approval re-check inside DiscordExecutor.
+    send_fn = urllib_discord_sender(iso)
+    executor = DiscordExecutor(iso, send_fn=send_fn, ledger=ledger)
     gateway = ApprovalGateway(ledger=ledger, iso=iso, registry=registry, outbox=outbox,
-                              executor=executor, approver_discord_id=owner)
+                              executor=executor.execute, approver_discord_id=owner)
     print("trellis discord — gateway constructed "
           f"(owner={owner}, {len(iso.allow.act)} act surface(s)). "
           "Every send still stays staged for the owner's ✅ (refusal #5 / W3).")
-    # The live websocket loop is the operator seam — it requires the real bot
-    # client and is not opened here.
+    # The live gateway loop is the operator seam — it requires the real bot client
+    # and is not opened here (never in tests).
     DiscordGatewayConnection(gateway, bot_token=token).run()
     return 0
 

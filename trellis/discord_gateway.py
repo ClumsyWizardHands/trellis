@@ -55,6 +55,10 @@ from .stage import (ActionStatus, DoubleFireError, FireOutcomeUnknown, Outbox,
                     StagedAction, UnapprovedFireError, act_surface_id)
 
 
+#: ledger kind for the durable proposal-post record the approval poll resumes from
+PROPOSAL_POSTED_KIND = "discord_proposal_posted"
+
+
 # ----- the reaction event + result ------------------------------------------
 
 
@@ -119,6 +123,34 @@ def make_discord_send_executor(
     return executor
 
 
+# ----- production wiring: the stdlib DiscordClient as the send path ----------
+
+
+def client_send_executor(iso: Isolation, client,
+                         surface_of: Callable[[StagedAction], str] = _act_surface_of
+                         ) -> Callable[[StagedAction], None]:
+    """The PRODUCTION executor: `make_discord_send_executor` with a sender that
+    POSTs the approved action through the stdlib `DiscordClient` (D11). The
+    idempotency key rides as the Discord `nonce` so a dedup-aware remote gets true
+    exactly-once (D26). guard_act still fires first (inside the returned executor);
+    this only supplies the actual transport."""
+    def sender(action: StagedAction, surface: str) -> None:
+        client.post_message(surface, action.content, nonce=action.idempotency_key)
+    return make_discord_send_executor(iso, sender=sender, surface_of=surface_of)
+
+
+def client_proposal_sender(client) -> Callable[[str, str], str]:
+    """A `proposal_sender` for `ApprovalGateway(proposal_sender=...)` that POSTs the
+    proposal body through the stdlib `DiscordClient` and returns the created
+    message id — the ref the owner reacts on. post_proposal calls `guard_act` on the
+    proposal surface BEFORE invoking this, so a non-allowlisted proposal surface
+    never reaches the wire."""
+    def send(surface: str, text: str) -> str:
+        created = client.post_message(surface, text)
+        return str((created or {}).get("id", "") or "")
+    return send
+
+
 # ----- the mapping logic (fully unit-tested) --------------------------------
 
 
@@ -155,6 +187,13 @@ class ApprovalGateway:
         # message_ref -> action_id, populated by post_proposal so a reaction that
         # carries only the message ref can be routed to its staged action.
         self._by_message_ref: dict[str, str] = {}
+        # message_ref -> (action_id, proposal_surface). The DURABLE proposal-post
+        # record: the stdlib approval poll (runner) needs the surface + message id
+        # to fetch_reactions after a restart, when the in-memory maps above are
+        # empty. Rebuilt from the ledger so a fresh process resumes polling the
+        # same proposals for the owner's ✅/❌.
+        self._proposal_posts: dict[str, tuple] = {}
+        self._load_proposal_posts()
 
     # ----- posting a proposal so there is something to react to --------------
 
@@ -176,7 +215,60 @@ class ApprovalGateway:
         ref = self.proposal_sender(self.proposal_surface, text)
         if ref:
             self._by_message_ref[str(ref)] = action.id
+            self._proposal_posts[str(ref)] = (action.id, self.proposal_surface)
+            # DURABLE record so the approval poll resumes across a restart: which
+            # action was posted, to which allowlisted surface, as which message.
+            self.ledger.append(
+                kind=PROPOSAL_POSTED_KIND, author=self._author,
+                body={"action_id": action.id, "surface": self.proposal_surface,
+                      "message_ref": str(ref)},
+                tags=("discord", "proposal", action.kind))
         return ref
+
+    # ----- the durable proposal-post record (restart-safe approval poll) ------
+
+    @property
+    def _author(self) -> str:
+        return (getattr(self.iso.identity, "name", "") or "trellis").strip() or "trellis"
+
+    def _load_proposal_posts(self) -> None:
+        """Rebuild message_ref → (action_id, surface) from the ledger's
+        `discord_proposal_posted` events, so a fresh process knows which staged
+        proposals it already posted (and where) and can keep polling them for the
+        owner's reaction. Idempotent: the last write for a ref wins."""
+        for e in self.ledger.entries():
+            if e.kind != PROPOSAL_POSTED_KIND:
+                continue
+            ref = str(e.body.get("message_ref", "") or "")
+            aid = e.body.get("action_id", "")
+            surf = e.body.get("surface", "")
+            if ref and aid:
+                self._by_message_ref[ref] = aid
+                self._proposal_posts[ref] = (aid, surf)
+
+    def staged_proposal_posts(self) -> list:
+        """The (action_id, surface, message_ref) triples whose action is STILL
+        STAGED — exactly the set the approval poll should fetch reactions for. A
+        proposal whose action has already been approved/denied/fired is filtered
+        out here, so the poll never re-touches a decided action."""
+        out = []
+        for ref, (aid, surf) in self._proposal_posts.items():
+            a = self.outbox.get(aid)
+            if a is not None and a.status == ActionStatus.STAGED:
+                out.append((aid, surf, ref))
+        return out
+
+    def on_polled_reaction(self, message_ref: str, reactor_discord_id: str,
+                           emoji: str, reactor_display_name: str = "") -> ReactionResult:
+        """Thin wiring for the stdlib poll path: turn one polled reaction (a
+        reactor snowflake + emoji on a proposal message) into a `ReactionEvent` and
+        route it through the SAME `on_reaction` the whole safety model already
+        guards. The poller supplies only the message ref (what fetch_reactions
+        knows); the gateway maps it back to the staged action. No alternate path —
+        every gate (owner-only, identity, Outbox lifecycle, isolation) still runs."""
+        return self.on_reaction(ReactionEvent(
+            message_ref=str(message_ref), reactor_discord_id=str(reactor_discord_id),
+            emoji=emoji, reactor_display_name=reactor_display_name))
 
     @staticmethod
     def _render_proposal(action: StagedAction) -> str:
