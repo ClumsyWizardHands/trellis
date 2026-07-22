@@ -14,7 +14,7 @@ useful the longer they work with you. → **New here? Read [WHAT-THIS-IS.md](WHA
 <p align="center">
   <a href="https://github.com/ClumsyWizardHands/trellis/actions/workflows/ci.yml"><img src="https://github.com/ClumsyWizardHands/trellis/actions/workflows/ci.yml/badge.svg" alt="CI"/></a>
   <img src="https://img.shields.io/badge/adversarial-independently%20verified-58a6ff?style=flat-square" alt="adversarial"/>
-  <img src="https://img.shields.io/badge/decisions-27%20triangulated-8957e5?style=flat-square" alt="decisions"/>
+  <img src="https://img.shields.io/badge/decisions-38%20triangulated-8957e5?style=flat-square" alt="decisions"/>
   <img src="https://img.shields.io/badge/core-zero%20runtime%20deps-d29922?style=flat-square" alt="deps"/>
   <img src="https://img.shields.io/badge/python-3.10%2B-e6edf3?style=flat-square" alt="python"/>
   <img src="https://img.shields.io/badge/license-MIT-8b949e?style=flat-square" alt="license"/>
@@ -315,14 +315,43 @@ trellis/
 ├── selfimprove.py the self-improvement engine: a skill estate + typed proposals —
 │                  the agent proposes its own repair, and never applies it alone
 ├── agent.py       the Witness: sense → resolve → act → verify → remember, now
-│                  over COMPILED context. Emits Y/N/T; [] is a legitimate answer
+│                  over COMPILED context, changing its own mind AUTONOMOUSLY as a
+│                  logged supersession (D33); Y/N/T; [] is a legitimate answer
+├── panel.py …     convene_verification (verify.py) runs the cheap Haiku seat on
+│                  every decision/reflection write — REFUTED marks it contested,
+│                  escalates, and drops it from the next cycle's trusted read (D35)
 └── providers/     model seats: mock (deterministic), claude_sdk (first-class,
-                   optional), openai_compat (local — Gemma/Hermes via Ollama, stdlib)
+                   optional), openai_compat (local — Gemma/Hermes via Ollama, stdlib);
+                   factory.py seats a separate cheaper VERIFIER (maker≠verifier, D34)
+```
+
+**The live surface — isolated Discord, sessions, the staged send path (D30–D38):**
+
+```
+├── isolation.py     trellis touches only its OWN surfaces: its own identity +
+│                    separate READ/ACT allowlists; a shared bridge's other-agent
+│                    traffic is dropped on read, refused on act (empty = inert)
+├── registry.py      a stable Discord snowflake → canonical id, so a rename can
+│                    never poison attribution (auto-registers, never merges two humans)
+├── ingest.py        the idempotent Discord→Ingestor bridge: a re-poll is a no-op,
+│                    an allowlisted channel implies its threads, DMs stay scoped
+├── sessions.py      every conversation as a session (DM per-interlocutor, threads,
+│                    channels) — the portal's legible, owner-only Session Log
+├── executor.py      the send path: CAN post, never on its own — guard_act-gated,
+│                    only ever the callable Outbox.fire invokes after a durable yes
+├── discord_gateway  the in-Discord approval gesture: a reaction routes to the same
+│                    authenticated, maker≠approver path — and ONLY the owner's counts
+├── runner.py        the local always-on tick/run (on with your machine, not a
+│                    server): ledger-derived daily budget, orphan-start sweep
+└── scheduler.py     scheduling as VERIFIABLE ledger state — a restart reconstructs
+                     what is scheduled and whether it actually fired
 ```
 
 **The comprehension portal** (`web/`, an optional extra): `app.py` + `views.py`
 (FastAPI + HTMX + SSE over the JSONL ledger), `glyph.py` + `selfportrait.py` (the
-honest self-image and its daily, deterministic morph).
+honest self-image and its daily, deterministic morph). Config + entrypoints:
+`config.py` (`.env`), `auth.py` (signed-session approver), `cli.py`
+(`init` / `doctor` / `demo` / `web` / `run` / `tick` / `discord`).
 
 Companion documents:
 
@@ -411,21 +440,29 @@ engine.can_take_effect(proposal_id)
 
 ## What this is not
 
-- Not a chat gateway. It composes with one (the Discord adapter you already
-  run, or any surface that can produce `Event`s and consume staged actions).
+- Not a chat gateway. It now carries its **own** isolated Discord surface —
+  idempotent ingestion, per-interlocutor sessions, and a guard_act-gated send
+  path (D30–D38) — but the core stays surface-agnostic (any source that produces
+  `Event`s and consumes staged actions composes just as well).
 - Not a skill marketplace, not auto-installed anything (see DECISIONS.md W1 —
   the 2026 supply-chain record is why).
-- Not autonomous outbound. Standing "proposed no" until the team ratifies
-  otherwise (W3).
+- Not autonomous outbound. The send path is built and CAN post, but every
+  outbound still stages for the owner's yes — the yes just happens in Discord now
+  (a ✅ reaction, D38). Refusal #5 / W3 stand: no auto-fire, no bypass.
 - Not a memory database. Files, beside the agent. The agent dies; the record
   survives.
 
 ---
 
 *Built 2026-07-15 from the corpus in `~/atlas`, the builds on `~/Desktop`, and the
-July 2026 harness field; hardened through 2026-07-21 against two external audits
-(an infrastructure/reliability pass and a context-engineering pass), with the
-highest-stakes changes independently re-verified by a separate agent — the harness's
-own maker≠verifier doctrine, applied to itself. 27 triangulated decisions, the
-acceptance suite + 10 adversarial scenarios on CI, zero runtime dependencies in the
-core.*
+July 2026 harness field; hardened through 2026-07-21 against four external audits
+(infrastructure/reliability, context-engineering, an architecture pass, and a
+code-sanity pass), with the highest-stakes changes independently re-verified by a
+separate agent — the harness's own maker≠verifier doctrine, applied to itself. The
+go-live layer (D31–D38) then wired it for a private Discord: isolated ingestion,
+per-interlocutor sessions, broad Haiku verification, the autonomous mind-change, a
+local always-on runner, and a staged send path whose approval happens in Discord —
+all code-complete and test-covered, awaiting only a trellis-owned bot token to run
+live (see [docs/GO-LIVE-CHECKLIST.md](docs/GO-LIVE-CHECKLIST.md)). 38 triangulated
+decisions, the acceptance suite + 10 adversarial scenarios on CI, zero runtime
+dependencies in the core.*
