@@ -148,5 +148,28 @@ class ClaudeSDKProvider:
                     chunks.append(text)
             return "\n".join(chunks)
 
-        text = anyio.run(_run)
+        # a HARD ceiling on the whole call: the third silent-stall class found
+        # on 2026-07-22 (after the Drive transport and the OAuth refresh) was a
+        # model call waiting forever. A hung seat must become a loud, caught
+        # per-item failure — the learning pass records it and moves on.
+        import concurrent.futures
+        import os as _os
+        raw = _os.environ.get("TRELLIS_MODEL_TIMEOUT", "").strip()
+        try:
+            ceiling = float(raw) if raw else 300.0
+        except ValueError:
+            ceiling = 300.0
+        pool = concurrent.futures.ThreadPoolExecutor(
+            max_workers=1, thread_name_prefix="claude-seat")
+        future = pool.submit(anyio.run, _run)
+        try:
+            text = future.result(timeout=ceiling)
+        except concurrent.futures.TimeoutError:
+            # do NOT wait for the wedged worker — abandon it loudly
+            pool.shutdown(wait=False, cancel_futures=True)
+            raise TimeoutError(
+                f"claude seat call exceeded {ceiling:.0f}s "
+                "(TRELLIS_MODEL_TIMEOUT) — treated as a failed call, "
+                "never a silent stall") from None
+        pool.shutdown(wait=False)
         return ProviderResponse(text=text, model=self.model)
