@@ -158,16 +158,53 @@ code{background:#0d1117;border:1px solid var(--line);border-radius:5px;padding:1
 SHELL = """<!doctype html><html><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1"><title>trellis · {title}</title>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/htmx/2.0.3/htmx.min.js"></script>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/htmx-ext-sse/2.2.2/sse.min.js"></script>
-<style>{style}</style></head><body>
+<style>{style}
+#livedot{{display:inline-block;width:.55em;height:.55em;border-radius:50%;background:#3a5;
+margin-right:.35em;opacity:.35;transition:opacity .2s}}
+#livedot.pulse{{opacity:1;box-shadow:0 0 6px #3a5}}</style></head><body>
 <header><h1>🌱 trellis</h1><span class="tag">a comprehension &amp; reflection portal — not an ops console</span>
-<span class="tag" style="margin-left:auto">{ledger} · live · SSE · <a href="/login" style="color:var(--acc)">sign in</a></span></header>
+<span class="tag" style="margin-left:auto"><span id="livedot"></span><span id="livetxt">live</span> · {ledger} · <a href="/login" style="color:var(--acc)">sign in</a></span></header>
 <main>
 <nav>{nav}</nav>
-<section hx-ext="sse" sse-connect="/stream">
-  <div hx-get="{path}?frag=1" hx-trigger="sse:tick" hx-swap="innerHTML">{body}</div>
+<section>
+  <div id="live" data-frag="{path}?frag=1">{body}</div>
 </section>
-</main></body></html>"""
+</main>
+<script>
+/* Live updates, dependency-free: the server emits an SSE 'tick' whenever the
+   ledger grows; each tick re-fetches this page's fragment and swaps it in.
+   (The htmx SSE *extension* silently failed to fire hx-trigger="sse:tick" —
+   a raw EventSource works everywhere, so the portal drives itself.) */
+(function () {{
+  var live = document.getElementById('live');
+  var dot = document.getElementById('livedot');
+  var txt = document.getElementById('livetxt');
+  var last = Date.now();
+  var busy = false;
+  function refresh() {{
+    if (busy) return;
+    busy = true;
+    fetch(live.dataset.frag, {{credentials: 'same-origin'}})
+      .then(function (r) {{ return r.ok ? r.text() : null; }})
+      .then(function (html) {{
+        if (html !== null) {{
+          live.innerHTML = html;
+          if (window.htmx) htmx.process(live);
+          last = Date.now();
+          dot.classList.add('pulse');
+          setTimeout(function () {{ dot.classList.remove('pulse'); }}, 400);
+        }}
+      }})
+      .finally(function () {{ busy = false; }});
+  }}
+  var es = new EventSource('/stream');
+  es.addEventListener('tick', refresh);
+  setInterval(function () {{
+    txt.textContent = 'live · updated ' + Math.round((Date.now() - last) / 1000) + 's ago';
+  }}, 1000);
+}})();
+</script>
+</body></html>"""
 
 
 def _nav_html(active: str) -> str:
