@@ -130,7 +130,12 @@ def test_doc_backlog_frontier_blocks_walk(ledger, tmp_path, ground):
                               ground=ground, provider=maker,
                               registry=IdentityRegistry(ledger), seed_terms=[],
                               days_per_pass=2, day_gate=False, docs_per_pass=2)
-    s = ritual.learning_pass(sources=[TranscriptFolderAdapter(folder)])
-    # 2 newest docs fed (07-13, 07-12); backlog remains → frontier = 07-12 →
-    # only 07-13 is walkable
-    assert s["days_digested"] == ["2026-07-13"]
+    # pass 1: comprehension runs FIRST (no corpus yet), then acquisition feeds
+    # the 2 newest docs (07-13, 07-12) with a backlog → frontier = 07-12
+    s1 = ritual.learning_pass(sources=[TranscriptFolderAdapter(folder)])
+    assert s1["days_digested"] == []
+    key = next(iter(s1["ingested"]))
+    assert s1["ingested"][key]["deferred_for_pacing"] == 2
+    # pass 2: the walk honors the frontier — only 07-13 is fully delivered
+    s2 = ritual.learning_pass(sources=[TranscriptFolderAdapter(folder)])
+    assert s2["days_digested"] == ["2026-07-13"]

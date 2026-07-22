@@ -1014,71 +1014,27 @@ class OnboardingRitual:
                 self._record_pass(summary, now)
                 return summary
 
-            if backfill is not None:
-                self._stage("backfill", "descending Discord history, newest "
-                            "first, curiosity-deepened", now)
-                summary["backfill"] = backfill.run(
-                    now, focus_channels=self._focus_channels()).to_body()
+            def _acquire():
+                """Acquisition — run AFTER comprehension each pass (Alex,
+                2026-07-22: the thinking must not queue behind the swallowing;
+                a slow or stuck source may cost this pass's intake, never its
+                understanding)."""
+                if backfill is not None:
+                    self._stage("backfill", "descending Discord history, newest "
+                                "first, curiosity-deepened", now)
+                    summary["backfill"] = backfill.run(
+                        now, focus_channels=self._focus_channels()).to_body()
+                if sources:
+                    self._stage("sources", "reading document sources, newest "
+                                "first, paced", now)
+                self._acquire_sources(sources, summary, now)
 
-            if sources:
-                self._stage("sources", "reading document sources, newest first, "
-                            "paced", now)
-            self._doc_frontier = None      # D55: recomputed each pass
-            for adapter in (sources or []):
-                name = type(adapter).__name__
-                # several adapters of one class (two transcript folders, two
-                # Drive folders) must not collapse onto one summary key.
-                where = (getattr(adapter, "folder", None)
-                         or getattr(adapter, "folder_id", "") or "")
-                if where:
-                    name = f"{name}({where})"
-                try:
-                    ing = Ingestor(self.ledger, author=self.author)
-                    batch, already, deferred, oldest_fed = \
-                        self._paced_batch(ing, adapter)
-                    if oldest_fed is not None:
-                        f = oldest_fed.date().isoformat()
-                        if self._doc_frontier is None or f > self._doc_frontier:
-                            self._doc_frontier = f
-                    res = ing.ingest(batch,
-                                     document_harvester(self.ledger, self.author))
-                    summary["ingested"][name] = {
-                        "processed": res.processed, "corrected": res.corrected,
-                        "already_known": already,
-                        "deferred_for_pacing": deferred,
-                        "skipped_files": list(getattr(adapter, "skipped", []))}
-                except Exception as e:
-                    # an ungranted or broken source is REPORTED, per source —
-                    # one bad surface never silences the others.
-                    summary["awaiting"].append({"source": name, "why": str(e)})
-
-            self._stage("scout", "scanning the corpus for loaded terms and "
-                        "quiet voices", now)
-            candidates = self.scout.scan(
-                (e.author, str(e.body.get("content", "")))
-                for e in _corpus(self.ledger))
-            minted = mint_term_curiosities(self.qlog, candidates,
-                                           self.author, self.ground)
-            summary["terms_minted"] = [term_from_assumption(m.body.get("assumption", ""))
-                                       for m in minted]
-            # a long-quiet voice becomes an open QUESTION about presence —
-            # asked, never assumed (the temporal-wave discipline, applied to who).
-            summary["presence_questions"] = [
-                q.body.get("title") for q in
-                mint_presence_curiosities(self.ledger, self.qlog,
-                                          self.author, self.ground)]
-
-            # D53: read a couple of days as units, newest first, BEFORE term
-            # pursuit — the day walk is the comprehension anchor.
-            summary["days_digested"] = self._digest_days(self.days_per_pass,
-                                                         now)
-            if self.day_gate:
-                summary["awaiting_day_review"] = pending_review_day(self.ledger)
-
-            from .verify import contested_items
-            contested_before = len(contested_items(self.ledger))
-            summary.update(self._pursue_terms(max_terms))
-            new_contested = len(contested_items(self.ledger)) - contested_before
+            # COMPREHENSION FIRST (Alex, 2026-07-22) — the day-walk, the term
+            # pursuit, and the curiosity minting happen in the pass's opening
+            # minutes; acquisition follows and may be slow without ever
+            # delaying the thinking.
+            new_contested = self._run_comprehension(summary, max_terms, now)
+            _acquire()
 
             self._stage("map", "writing the navigable map + the check-in", now)
             summary["map_files"] = write_map_overview(
@@ -1094,6 +1050,65 @@ class OnboardingRitual:
                    f"{summary['open_unknowns']} unknown(s) on the record",
                    evidence=[entry.id])
         return summary
+
+    def _run_comprehension(self, summary: dict, max_terms: int,
+                           now) -> int:
+        """Scout → presence → the gated day-walk → term pursuit. Returns the
+        count of newly contested subjects (for the check-in digest gate)."""
+        self._stage("scout", "scanning the corpus for loaded terms and "
+                    "quiet voices", now)
+        candidates = self.scout.scan(
+            (e.author, str(e.body.get("content", "")))
+            for e in _corpus(self.ledger))
+        minted = mint_term_curiosities(self.qlog, candidates,
+                                       self.author, self.ground)
+        summary["terms_minted"] = [term_from_assumption(m.body.get("assumption", ""))
+                                   for m in minted]
+        # a long-quiet voice becomes an open QUESTION about presence —
+        # asked, never assumed (the temporal-wave discipline, applied to who).
+        summary["presence_questions"] = [
+            q.body.get("title") for q in
+            mint_presence_curiosities(self.ledger, self.qlog,
+                                      self.author, self.ground)]
+
+        summary["days_digested"] = self._digest_days(self.days_per_pass, now)
+        if self.day_gate:
+            summary["awaiting_day_review"] = pending_review_day(self.ledger)
+
+        from .verify import contested_items
+        contested_before = len(contested_items(self.ledger))
+        summary.update(self._pursue_terms(max_terms))
+        return len(contested_items(self.ledger)) - contested_before
+
+    def _acquire_sources(self, sources, summary: dict, now) -> None:
+        self._doc_frontier = None      # D55: recomputed each acquisition
+        for adapter in (sources or []):
+            name = type(adapter).__name__
+            # several adapters of one class (two transcript folders, two
+            # Drive folders) must not collapse onto one summary key.
+            where = (getattr(adapter, "folder", None)
+                     or getattr(adapter, "folder_id", "") or "")
+            if where:
+                name = f"{name}({where})"
+            try:
+                ing = Ingestor(self.ledger, author=self.author)
+                batch, already, deferred, oldest_fed = \
+                    self._paced_batch(ing, adapter)
+                if oldest_fed is not None:
+                    f = oldest_fed.date().isoformat()
+                    if self._doc_frontier is None or f > self._doc_frontier:
+                        self._doc_frontier = f
+                res = ing.ingest(batch,
+                                 document_harvester(self.ledger, self.author))
+                summary["ingested"][name] = {
+                    "processed": res.processed, "corrected": res.corrected,
+                    "already_known": already,
+                    "deferred_for_pacing": deferred,
+                    "skipped_files": list(getattr(adapter, "skipped", []))}
+            except Exception as e:
+                # an ungranted or broken source is REPORTED, per source —
+                # one bad surface never silences the others.
+                summary["awaiting"].append({"source": name, "why": str(e)})
 
     # ----- D53: comprehension walks the record one day at a time ------------
 

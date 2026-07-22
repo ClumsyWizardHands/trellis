@@ -458,6 +458,16 @@ def cmd_demo(args: argparse.Namespace) -> int:
 
 # ---------- tick / run (the always-on runner, D37) ----------
 
+def _daemon_socket_guard(seconds: float = 120.0) -> None:
+    """A process-wide ceiling on EVERY socket the daemon ever opens. Two
+    separate no-timeout defaults (googleapiclient's transport, then google-
+    auth's refresh transport) each froze the resident for over an hour on
+    2026-07-22 — an always-on process must structurally not be able to block
+    forever on a wire. Explicit shorter timeouts (Discord's 15s) still win."""
+    import socket
+    socket.setdefaulttimeout(seconds)
+
+
 def _build_runner():
     """Construct a ledger-backed Runner over the configured ledger + a windowed,
     ledger-derived daily budget. Model handlers are a separate seat (a provider must
@@ -519,6 +529,7 @@ def _print_health(runner) -> None:
 
 def cmd_tick(args: argparse.Namespace) -> int:
     config.load_dotenv()
+    _daemon_socket_guard()
     runner = _build_runner()
     # D44: the witness cycle is seated when an EMP + model seat are configured;
     # unconfigured, the tick still sweeps orphans, registers schedules, enforces
@@ -542,6 +553,7 @@ def cmd_tick(args: argparse.Namespace) -> int:
 
 def cmd_run(args: argparse.Namespace) -> int:
     config.load_dotenv()
+    _daemon_socket_guard()
     from datetime import timedelta
 
     from .isolation import Isolation
@@ -932,6 +944,7 @@ def cmd_begin(args: argparse.Namespace) -> int:
     coordinated set (backfill + sources + learning loop + verifier panel) under
     the runner. `--once` runs a single pass and exits; default stays resident."""
     config.load_dotenv()
+    _daemon_socket_guard()
     from datetime import timedelta
 
     from .isolation import Isolation

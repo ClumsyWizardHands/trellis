@@ -103,11 +103,19 @@ def _load_credentials(token_store: str):
     unusable — trellis never invents or repairs a credential."""
     try:
         from google.oauth2.credentials import Credentials
-        from google.auth.transport.requests import Request
+        from google.auth.transport.requests import Request as _Request
     except ImportError as e:
         raise GoogleNotGranted(
             "the Google client libraries are not installed — "
             "pip install 'trellis-harness[google]'") from e
+
+    class Request(_Request):
+        """google.auth's refresh transport defaults to NO timeout — the exact
+        untimeouted SSL read the resident was found blocked in (2026-07-22,
+        twice). A token refresh gets 60 seconds, then fails loud."""
+        def __call__(self, *args, **kwargs):
+            kwargs.setdefault("timeout", 60)
+            return super().__call__(*args, **kwargs)
     p = Path(token_store).expanduser()
     if not p.is_file():
         raise GoogleNotGranted(
