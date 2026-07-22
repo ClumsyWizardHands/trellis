@@ -349,6 +349,60 @@ def test_propose_meaning_parses_defensively(ledger, ground, tmp_path):
     assert "«data" in good.calls[0]["messages"][0]["content"]
 
 
+def test_term_yn_t_grammar_aims_curiosity(ledger, tmp_path, ground):
+    """Alex, 2026-07-22: 'not only a yes — a no and a triangulate for any
+    confirmation.' N re-explores BLIND (the reason never reaches the prompt);
+    T folds the note in as steer (capped 0.8); Y closes at human confidence
+    using trellis's own reading when no wording is given."""
+    from trellis.onboard import review_term, latest_term_observation
+    ws = Workspace(tmp_path / "ws", ledger)
+    qlog = QuestionLog(ledger, ground)
+    _grant(ledger)
+    _seed_messages(ledger, EMPIRE_TEXTS)
+    maker = MockProvider(id="mock:s")
+    maker.enqueue_text(json.dumps({"meaning": "a corporate hierarchy",
+                                   "confidence": 0.6, "unsure": ""}))
+    ritual = OnboardingRitual(ledger, ws, ground=ground, provider=maker,
+                              registry=IdentityRegistry(ledger),
+                              seed_terms=["empire"], day_gate=False)
+    ritual.learning_pass(max_terms=1)
+
+    # N — keep digging, reason withheld
+    review_term(ledger, ws, qlog, "empire", "no", "alex",
+                note="it's the EMP acronym, obviously")
+    maker.enqueue_text(json.dumps({"meaning": "a layered team methodology",
+                                   "confidence": 0.9, "unsure": ""}))
+    ritual.learning_pass(max_terms=1)
+    reprompt = maker.calls[-1]["messages"][0]["content"]
+    assert "answered NO" in reprompt and "did not say why" in reprompt
+    assert "acronym, obviously" not in reprompt        # the reason stays withheld
+    obs = latest_term_observation(ledger, "empire")
+    assert obs.body["meaning"] == "a layered team methodology"
+    assert obs.body["confidence"] == 0.7               # still the unconfirmed cap
+    assert "human's NO" in obs.body["meaning_basis"]
+
+    # T — the note steers, and the informed reading may sit at 0.8
+    review_term(ledger, ws, qlog, "empire", "triangulate", "alex",
+                note="EMP+IRE: Ends/Means/Principles + Identity/Resentments/Emotions")
+    maker.enqueue_text(json.dumps({"meaning": "the EMP+IRE identity schema",
+                                   "confidence": 0.95, "unsure": ""}))
+    ritual.learning_pass(max_terms=1)
+    reprompt2 = maker.calls[-1]["messages"][0]["content"]
+    assert "TRIANGULATE" in reprompt2 and "Resentments" in reprompt2
+    obs2 = latest_term_observation(ledger, "empire")
+    assert obs2.body["confidence"] == 0.8              # T-informed cap
+
+    # Y with no wording — trellis's own reading is confirmed, question closes
+    review_term(ledger, ws, qlog, "empire", "yes", "alex")
+    obs3 = latest_term_observation(ledger, "empire")
+    assert obs3.body["confidence"] == 0.95
+    assert obs3.body["human_confirmed_by"] == "alex"
+    assert obs3.body["meaning"] == "the EMP+IRE identity schema"
+    akey = assumption_key(term_assumption("empire"))
+    assert not any(q.body.get("assumption_key") == akey
+                   for q in qlog.open_questions())
+
+
 # --------------------------------------------------------------------------- #
 # 5. the full pass — coordinated, idempotent, honest                           #
 # --------------------------------------------------------------------------- #

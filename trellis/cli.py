@@ -1126,6 +1126,39 @@ def cmd_day(args: argparse.Namespace) -> int:
     return 0
 
 
+# ---------- term (the human's Y/N/T on a term reading) ----------
+
+
+def cmd_term(args: argparse.Namespace) -> int:
+    """`trellis term "empire" yes|no|triangulate ["note"]` — Y confirms (your
+    note = your wording), N sends it digging blind, T steers the re-read."""
+    config.load_dotenv()
+    from .curiosity import QuestionLog
+    from .ledger import Ledger
+    from .memory import Workspace
+    from .onboard import review_term
+    ledger = Ledger(config.ledger_path())
+    human = os.environ.get("TRELLIS_HUMAN", "operator").strip() or "operator"
+    note = " ".join(args.note or [])
+    try:
+        review_term(ledger, Workspace(_workspace_root(), ledger),
+                    QuestionLog(ledger), args.term, args.verdict, human, note)
+    except (KeyError, ValueError) as e:
+        print(f"✗ {e}", file=sys.stderr)
+        return 1
+    v = args.verdict.strip().lower()
+    if v in ("y", "yes"):
+        print(f"✓ '{args.term}' confirmed — the question closes at human "
+              "confidence; the note keeps living as usage accrues.")
+    elif v in ("n", "no"):
+        print(f"✓ noted: NO on '{args.term}' — it will re-trace and try again "
+              "on its own; your reason deliberately not passed along.")
+    else:
+        print(f"✓ noted: TRIANGULATE on '{args.term}' — your note steers the "
+              "re-read (capped 0.8 until confirmed).")
+    return 0
+
+
 # ---------- google (the human's one-time browser grant) ----------
 
 
@@ -1201,6 +1234,11 @@ def main(argv=None) -> int:
                                        "(closes its curiosity at human confidence)")
     c.add_argument("term", help="the term, e.g. \"empire\"")
     c.add_argument("meaning", help="what it means here, in your words")
+    tm = sub.add_parser("term", help="Y/N/T on a term reading — yes confirms, "
+                                     "no sends it digging, triangulate steers")
+    tm.add_argument("term")
+    tm.add_argument("verdict", help="yes | no | triangulate")
+    tm.add_argument("note", nargs="*", help="note (T steer / Y wording)")
     dy = sub.add_parser("day", help="the Y/N/T check on the day-walk "
                                     "(no args = show the day waiting on you)")
     dy.add_argument("day", nargs="?", help="YYYY-MM-DD")
@@ -1213,7 +1251,7 @@ def main(argv=None) -> int:
             "tick": cmd_tick, "run": cmd_run, "web": cmd_web,
             "discord": cmd_discord, "begin": cmd_begin, "onboard": cmd_begin,
             "google": cmd_google, "confirm": cmd_confirm,
-            "day": cmd_day}[args.cmd](args)
+            "day": cmd_day, "term": cmd_term}[args.cmd](args)
 
 
 if __name__ == "__main__":  # pragma: no cover

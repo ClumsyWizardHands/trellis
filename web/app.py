@@ -800,9 +800,20 @@ def _curiosities_body(led: Ledger) -> str:
                                f'{esc(b["unsure"])}</div>')
                 if b.get("evidence_window"):
                     out.append(f'<div class="muted small">{esc(b["evidence_window"])}</div>')
-                placeholder = "edit my read if it's off — submitting confirms it"
-                button = "✓ Yes — that's what it means"
-                prefill = f' value="{esc(meaning)}"'
+                # full Y/N/T (Alex: "not only a yes"): N sends it back to dig
+                # on its own; T carries the note; Y confirms (the note, when
+                # given, is the human's own wording).
+                out.append(
+                    '<form method="post" action="/term-review" '
+                    'style="margin-top:8px;display:flex;gap:8px;align-items:center;flex-wrap:wrap">'
+                    f'<input type="hidden" name="term" value="{esc(term)}">'
+                    '<button name="verdict" value="yes" class="good">✓ Yes — that\'s right</button>'
+                    '<button name="verdict" value="no">✗ No — keep digging (I won\'t say why)</button>'
+                    '<button name="verdict" value="triangulate">△ Triangulate with note →</button>'
+                    '<input name="note" placeholder="clarifying note (steers the re-read on T; '
+                    'your own wording on Y; recorded but withheld on N)" '
+                    'style="flex:1;min-width:240px"></form></div>')
+                continue
             elif obs is not None:
                 lin = b.get("lineage") or {}
                 out.append(f'<div class="muted small" style="margin-top:4px">'
@@ -1079,6 +1090,25 @@ def _days_body(led: Ledger) -> str:
 @app.get("/days", response_class=HTMLResponse)
 def days_page(frag: int = 0):
     return _respond("/days", _days_body(_ledger()), bool(frag))
+
+
+@app.post("/term-review")
+def term_review_post(request: Request, term: str = Form(...),
+                     verdict: str = Form(...), note: str = Form("")):
+    human = _require_human(request)      # server-verified, not a form field
+    from pathlib import Path as _P
+    from trellis.curiosity import QuestionLog
+    from trellis.memory import Workspace
+    from trellis.onboard import review_term
+    led = _ledger()
+    vp = os.environ.get("TRELLIS_VAULT_PATH", "").strip()
+    root = _P(vp).expanduser() if vp else _P(LEDGER_PATH).parent / "workspace"
+    try:
+        review_term(led, Workspace(root, led), QuestionLog(led),
+                    term, verdict, human, note)
+    except (KeyError, ValueError) as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    return RedirectResponse("/curiosities", status_code=303)
 
 
 @app.post("/confirm-term")

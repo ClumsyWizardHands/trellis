@@ -56,6 +56,7 @@ CONSENT_KIND = "onboard_consent"
 STAGE_KIND = "onboard_stage"
 DAY_DIGEST_KIND = "day_digest"
 DAY_REVIEW_KIND = "day_review"
+TERM_REVIEW_KIND = "term_review"
 INTRO_KIND = "onboard_introduction"
 PASS_KIND = "onboard_pass"
 TERM_OBSERVATION_KIND = "term_observation"
@@ -416,7 +417,8 @@ _MEANING_SYSTEM = (
 
 
 def propose_meaning(provider, term: str, lineage: TermLineage,
-                    ledger: Ledger, max_excerpts: int = 8) -> Optional[dict]:
+                    ledger: Ledger, max_excerpts: int = 8,
+                    steer: str = "") -> Optional[dict]:
     """Ask the configured seat what the traced uses suggest the term means.
     The excerpts ride inside a data fence (retrieved content is evidence, not
     instructions). A malformed reply returns None — recorded upstream, never
@@ -443,6 +445,7 @@ def propose_meaning(provider, term: str, lineage: TermLineage,
         return None
     user = (f"The term: '{term}'\n\nTraced uses, oldest first:\n"
             + fence_untrusted("\n".join(excerpts))
+            + (steer or "")
             + "\n\nWhat does it appear to mean HERE? JSON only.")
     resp = provider.complete(system=_MEANING_SYSTEM,
                              messages=[{"role": "user", "content": user}])
@@ -492,7 +495,9 @@ def record_term_observation(ledger: Ledger, workspace: Workspace,
                             author: str, ground: TimeGround,
                             proposed: Optional[dict] = None,
                             human_confirmed_by: Optional[str] = None,
-                            human_meaning: Optional[str] = None) -> Entry:
+                            human_meaning: Optional[str] = None,
+                            cap: float = MODEL_MEANING_CONFIDENCE_CAP,
+                            basis_note: str = "") -> Entry:
     """Put the traced understanding ON THE RECORD: one `term_observation` entry
     (folding onto the prior one for the same term — supersession, not a fork),
     a map note beside it, and a NON-DRY seek tying the map-move to the term's
@@ -509,9 +514,10 @@ def record_term_observation(ledger: Ledger, workspace: Workspace,
         meaning = proposed.get("meaning", "")
         # curiosity, not confabulation: the model's own confidence is honored
         # but CAPPED — an unconfirmed model reading never presents as certainty.
-        confidence = round(min(MODEL_MEANING_CONFIDENCE_CAP,
-                               float(proposed.get("confidence", 0.0))), 3)
-        basis = "proposed by the model seat from the traced uses; unconfirmed"
+        # A T-informed re-proposal (human steer folded in) may sit at 0.8.
+        confidence = round(min(cap, float(proposed.get("confidence", 0.0))), 3)
+        basis = basis_note or ("proposed by the model seat from the traced "
+                               "uses; unconfirmed")
     else:
         meaning = ""
         confidence = TRACE_ONLY_CONFIDENCE
@@ -641,6 +647,60 @@ def resolve_term_if_verified(qlog: QuestionLog, term: str, obs: Entry,
         return True
     except (KeyError, NotResolvedError):
         return False   # no open question (already closed), or the tie is missing
+
+
+def latest_term_observation(ledger: Ledger, term: str) -> Optional[Entry]:
+    tkey = "term:" + question_key(term)
+    return next((e for e in ledger.active(TERM_OBSERVATION_KIND)
+                 if e.body.get("term_key") == tkey), None)
+
+
+def term_review_for(ledger: Ledger, term: str) -> Optional[Entry]:
+    """The latest human review of the CURRENT observation (a re-proposal makes
+    a new observation, which clears the review — same shape as the day-walk)."""
+    obs = latest_term_observation(ledger, term)
+    if obs is None:
+        return None
+    latest = None
+    for e in ledger.entries():
+        if e.kind == TERM_REVIEW_KIND and e.body.get("obs_id") == obs.id:
+            latest = e
+    return latest
+
+
+def review_term(ledger: Ledger, workspace: Workspace, qlog: QuestionLog,
+                term: str, verdict: str, human: str, note: str = "",
+                ground: Optional[TimeGround] = None,
+                author: str = "trellis-onboard") -> Entry:
+    """The human's Y/N/T on a term reading (Alex, 2026-07-22: 'not only a yes
+    — a no and a triangulate for ANY confirmation'). Y confirms — the human's
+    own wording when given, else trellis's current reading — and closes the
+    question. N and T keep the question OPEN and send the agent back to
+    explore: N deliberately without the reason; T with the human's note as
+    trusted steer. Curiosity is not ended by a check — it is aimed."""
+    human = require_identity(human, "reviewing human")
+    v = _VERDICT_WORDS.get((verdict or "").strip().lower())
+    if v is None:
+        raise ValueError(f"verdict must be yes/no/triangulate, got {verdict!r}")
+    ground = ground or ledger.ground
+    if v == "Y":
+        obs = latest_term_observation(ledger, term)
+        meaning = note.strip() or (obs.body.get("meaning", "") if obs else "")
+        if not meaning:
+            raise ValueError(f"'{term}' has no reading to confirm yet — give "
+                             "the meaning in your own words, or wait for its "
+                             "proposal")
+        return confirm_term_meaning(ledger, workspace, qlog, term, human,
+                                    meaning, ground, author=author)
+    obs = latest_term_observation(ledger, term)
+    if obs is None:
+        raise KeyError(f"no observation of '{term}' yet — nothing to review")
+    return ledger.append(
+        kind=TERM_REVIEW_KIND, author=human,
+        body={"term": term.strip().lower(),
+              "term_key": "term:" + question_key(term),
+              "obs_id": obs.id, "verdict": v, "note": note},
+        tags=("onboard", "term-review", v))
 
 
 def confirm_term_meaning(ledger: Ledger, workspace: Workspace, qlog: QuestionLog,
@@ -1579,10 +1639,16 @@ class OnboardingRitual:
         stale_ids = {e.id for e in self.qlog.stale()}
         for q in self.qlog.open_questions():
             term = term_from_assumption(q.body.get("assumption", ""))
-            if term:
-                open_terms.append((q.id not in stale_ids, q, term))
-        open_terms.sort(key=lambda t: t[0])          # stale (False) first
-        for _, q, term in open_terms[:max_terms]:
+            if not term:
+                continue
+            # a human N/T on the current reading is the STRONGEST pull: the
+            # human aimed the curiosity — those terms are re-explored first.
+            review = term_review_for(self.ledger, term)
+            reviewed = review is not None and review.body.get("verdict") in ("N", "T")
+            open_terms.append((not reviewed, q.id not in stale_ids, q, term,
+                               review if reviewed else None))
+        open_terms.sort(key=lambda t: (t[0], t[1]))   # reviewed, then stale
+        for _, _, q, term, review in open_terms[:max_terms]:
             self._stage("pursue", f"pursuing '{term}' — tracing lineage, then "
                         "the model proposes and the panel judges (model stages "
                         "can be minutes of ledger silence; this marker is why "
@@ -1596,17 +1662,39 @@ class OnboardingRitual:
                 pursued.append({"term": term, "outcome": "no occurrences yet "
                                 "(dry seek recorded; question stays open)"})
                 continue
+            steer, cap, basis_note = "", MODEL_MEANING_CONFIDENCE_CAP, ""
+            if review is not None:
+                v = review.body.get("verdict")
+                if v == "N":
+                    steer = ("\n\nA human reviewed the previous reading of this "
+                             "term and answered NO — it was not right. They "
+                             "deliberately did not say why. Re-trace and read "
+                             "again, more curiously; look for what a first "
+                             "reading would miss (a second meaning, an acronym, "
+                             "a deliberate casing, a shifted usage).")
+                    basis_note = ("re-proposed after the human's NO (their "
+                                  "reason deliberately withheld)")
+                elif v == "T":
+                    note = review.body.get("note") or "(no note given)"
+                    steer = ("\n\nA human reviewed the previous reading and "
+                             "answered TRIANGULATE — close, but there is more "
+                             f"depth. Their clarifying note (trusted): {note}\n"
+                             "Fold it in, re-trace, and read again.")
+                    cap = 0.8
+                    basis_note = ("re-proposed WITH the human's triangulation "
+                                  "note folded in")
             proposed = None
             if self.provider is not None:
                 try:
                     proposed = propose_meaning(self.provider, term, lineage,
-                                               self.ledger)
+                                               self.ledger, steer=steer)
                 except Exception as e:
                     pursued.append({"term": term,
                                     "outcome": f"model seat failed: {e}"})
             obs = record_term_observation(
                 self.ledger, self.workspace, self.qlog, term, lineage,
-                author=self.author, ground=self.ground, proposed=proposed)
+                author=self.author, ground=self.ground, proposed=proposed,
+                cap=cap, basis_note=basis_note)
             verdict = None
             try:
                 verdict = verify_term_understanding(self.ledger, obs,
