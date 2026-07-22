@@ -1,0 +1,11 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "trellis-web",
+      "runtimeExecutable": "trellis",
+      "runtimeArgs": ["web"],
+      "port": 8674
+    }
+  ]
+}

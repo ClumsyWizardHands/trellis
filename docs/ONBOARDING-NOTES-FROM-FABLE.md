@@ -137,6 +137,17 @@ What was built (all new modules; no core rewritten):
   per-call estimate the human ratifies), then wire it into every model-bearing
   handler. Until then a metered seat's cap is a comfort, not a cap (see (a)1).
 
+- **D51 (proposal) — Derivation lineage: prefer the primary source.** Alex
+  (2026-07-22): Gemini meeting notes are markedly worse than the recordings
+  they derive from. Today the harness knows only *fallibility*
+  (`machine_transcribed`, floor+OR — now correctly set on all Gemini notes,
+  with 444 prior entries retro-corrected by supersession). It does NOT know
+  *derivation* — that note X and recording Y describe the same meeting, and Y
+  outranks X. Fuller version: a derivation link on ingest (same-date/title
+  matching, or explicit), so lineage tracing cites the primary source when
+  both exist and the derivative only fills gaps. Until then, both are
+  ingested and both are honestly flagged; neither is preferred.
+
 - **D44 (proposal) — Wire the Witness cycle from the CLI.** Choose what feeds
   it (e.g. each tick's newly admitted messages per surface, as `Event`s), at
   what cadence, and with which provider seat — then `trellis run` grows the

@@ -42,8 +42,13 @@ MAX_DOCUMENT_CHARS = 200_000
 
 #: extensions that are machine transcription by format
 _ASR_EXTS = {".vtt", ".srt"}
-#: filename markers that signal ASR output
-_ASR_MARKERS = ("whisper", "autotranscript", "auto-transcript", "asr")
+#: filename markers that signal MACHINE-GENERATED text — ASR output, and
+#: AI-generated meeting notes. Gemini notes are flagged on Alex's direct word
+#: (2026-07-22): "notes from gemini are much worse than the actual transcripts
+#: they come from" — they are a lossy derivative, and their fallibility must
+#: ride every understanding built on them (FLOOR + OR, never laundered).
+_ASR_MARKERS = ("whisper", "autotranscript", "auto-transcript", "asr",
+                "notes-by-gemini", "notes by gemini", "meeting-started")
 
 _DATE_PREFIX = re.compile(r"^(\d{4})-(\d{2})-(\d{2})")
 
