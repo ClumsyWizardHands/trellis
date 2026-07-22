@@ -1045,6 +1045,8 @@ def _days_body(led: Ledger) -> str:
         day = b["day"]
         state = day_review_state(led, day)
         cls, label = state_pill.get(state, ('good', state))
+        if state == "refuted_by_panel" and int(b.get("rework", 0)) >= 2:
+            label = '✗ panel refuted twice — your call now'
         out.append('<div class="panel">')
         out.append(f'<h3>{esc(day)} <span class="pill {cls}">{esc(label)}</span> '
                    f'<span class="muted small">confidence {b.get("confidence")} · '

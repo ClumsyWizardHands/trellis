@@ -601,6 +601,15 @@ def verify_term_understanding(ledger: Ledger, obs: Entry, maker: str,
     if verifier is None:
         return None
     term = obs.body.get("term", "?")
+    lin = obs.body.get("lineage") or {}
+    # the lenses judge the reading against REAL traced excerpts — never
+    # against a ledger id they cannot open (the confabulation fix).
+    trace_text = json.dumps(
+        {"occurrences": lin.get("occurrences"),
+         "first_use": lin.get("first_use"), "latest_use": lin.get("latest_use"),
+         "users": (lin.get("users") or [])[:10],
+         "case_variants": lin.get("case_variants")},
+        ensure_ascii=False, default=str)[:3500]
     claim = CompletionClaim(
         maker=maker,
         task=f"map the meaning of the term '{term}' from the record",
@@ -608,7 +617,10 @@ def verify_term_understanding(ledger: Ledger, obs: Entry, maker: str,
         evidence=[Evidence(EvidenceKind.LEDGER, obs.id,
                            note="the term observation (lineage + reading)",
                            expect_kind=TERM_OBSERVATION_KIND,
-                           expect_contains=term)])
+                           expect_contains=term),
+                  Evidence(EvidenceKind.OUTPUT, ref=trace_text,
+                           note="the traced lineage (earliest + most recent "
+                                "uses) — judge the reading against THESE")])
     return convene_verification(ledger, claim, verifier,
                                 subject_id=obs.id,
                                 subject_kind=TERM_OBSERVATION_KIND)
@@ -893,23 +905,34 @@ def day_review_state(ledger: Ledger, day: str) -> str:
         return "undigested"
     if "counts only" in (d.body.get("basis") or ""):
         return "approved"        # nothing was claimed — nothing to review
+    # the HUMAN's verdict on THIS digest outranks the panel's contest — after
+    # the machine spends its re-read allowance, the owner's Y/N/T is the
+    # authority (the contested entry itself stays on the portal rail until
+    # resolved there; only the WALK's state defers to the human here).
+    r = _review_for(ledger, d.id)
+    if r is not None:
+        return {"Y": "approved", "N": "rejected",
+                "T": "triangulating"}.get(r.body.get("verdict"), "pending")
     from .verify import contested_items
     if any(c["subject_id"] == d.id for c in contested_items(ledger)):
         return "refuted_by_panel"
-    r = _review_for(ledger, d.id)
-    if r is None:
-        return "pending"
-    return {"Y": "approved", "N": "rejected",
-            "T": "triangulating"}.get(r.body.get("verdict"), "pending")
+    return "pending"
 
 
 def pending_review_day(ledger: Ledger) -> Optional[str]:
-    """The newest day sitting at the human gate, or None."""
+    """The newest day sitting at the human gate, or None. A day the panel
+    refuted TWICE is also the human's now — the machine spent its re-read
+    allowance; parking it invisible would be a silent stall."""
     days = sorted({e.body.get("day") for e in ledger.active(DAY_DIGEST_KIND)
                    if e.body.get("day")}, reverse=True)
     for day in days:
-        if day_review_state(ledger, day) == "pending":
+        state = day_review_state(ledger, day)
+        if state == "pending":
             return day
+        if state == "refuted_by_panel":
+            d = latest_day_digest(ledger, day)
+            if d is not None and int(d.body.get("rework", 0)) >= 2:
+                return day
     return None
 
 
@@ -1294,7 +1317,17 @@ class OnboardingRitual:
                 summary=body["summary"][:300],
                 evidence=[Evidence(EvidenceKind.LEDGER, entry.id,
                                    expect_kind=DAY_DIGEST_KIND,
-                                   expect_contains=day)])
+                                   expect_contains=day),
+                          # the lenses must judge the summary against the
+                          # ACTUAL items — a model verifier cannot open a
+                          # ledger id, and asking it to judge unseen evidence
+                          # produced confabulated verdicts in both directions
+                          # (live, 2026-07-22).
+                          Evidence(EvidenceKind.OUTPUT,
+                                   ref="\n".join(
+                                       self._day_lines(entries))[:4000],
+                                   note="the day's items (bounded) — judge "
+                                        "the summary against THESE")])
             try:
                 convene_verification(self.ledger, claim, self.verifier,
                                      subject_id=entry.id,
@@ -1307,10 +1340,8 @@ class OnboardingRitual:
                     tags=("verify", "error", self.author))
         return entry
 
-    def _propose_day_digest(self, day: str, entries: list, mode: str = "fresh",
-                            human_note: str = "") -> Optional[dict]:
-        if self.provider is None:
-            return None
+    @staticmethod
+    def _day_lines(entries: list) -> list:
         rows = entries[-30:]              # bounded; the newest of a huge day
         lines = []
         for e in rows:
@@ -1318,6 +1349,14 @@ class OnboardingRitual:
                    else f"(document) {str(e.body.get('title', '?'))[:40]}")
             lines.append(f"[{e.stamp.event_time.strftime('%H:%M')} {who}] "
                          f"{str(e.body.get('content', ''))[:160]}")
+        return lines
+
+    def _propose_day_digest(self, day: str, entries: list, mode: str = "fresh",
+                            human_note: str = "") -> Optional[dict]:
+        if self.provider is None:
+            return None
+        rows = entries[-30:]
+        lines = self._day_lines(entries)
         steer = ""
         if mode == "N":
             steer = ("\n\nA human reviewed a previous reading of this day and "

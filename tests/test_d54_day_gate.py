@@ -150,6 +150,61 @@ def test_panel_refutes_before_the_human_is_bothered(ledger, tmp_path, ground):
     assert day_review_state(ledger, "2026-07-10") == "pending"   # NOW the human
 
 
+def test_markdown_bold_verdicts_parse(ledger, tmp_path, ground):
+    """A lens answering '**VERIFIED**' must count as VERIFIED (live catch:
+    it was recorded INSUFFICIENT); 'NOT VERIFIED' must never count."""
+    from trellis.verify import CompletionClaim, Evidence, EvidenceKind, \
+        ModelVerifier, VerdictStatus
+    claim = CompletionClaim(maker="maker-a", task="t", summary="s",
+                            evidence=[Evidence(EvidenceKind.OUTPUT, "content")])
+    for reply, want in (("**VERIFIED**\nok", VerdictStatus.VERIFIED),
+                        ("`REFUTED`\nbad", VerdictStatus.REFUTED),
+                        ("NOT VERIFIED\nhm", VerdictStatus.INSUFFICIENT)):
+        p = MockProvider(id="mock:v")
+        p.enqueue_text(reply)
+        v = ModelVerifier("lens-x", p).verify(claim)
+        assert v.status == want, reply
+
+
+def test_panel_judges_against_the_actual_items(ledger, tmp_path, ground):
+    """The lenses receive the day's REAL item lines as OUTPUT evidence — never
+    only a ledger id they cannot open (the confabulation fix)."""
+    _seed_days(ledger, 1)
+    maker = MockProvider(id="mock:s")
+    maker.enqueue_text(_day_json("a reading"))
+    vprov = MockProvider(id="mock:haiku")
+    for _ in range(4):
+        vprov.enqueue_text("VERIFIED\nok")
+    panel = VerifierPanel("onboard-panel", vprov, ledger=ledger,
+                          rule_verifier=RuleVerifier("onboard-panel:floor",
+                                                     ledger, ground))
+    _ritual(ledger, tmp_path, ground, maker, verifier=panel).learning_pass()
+    lens_prompt = vprov.calls[0]["messages"][0]["content"]
+    assert "day 0 msg 0" in lens_prompt          # the actual item content
+    assert "judge the summary against THESE" in lens_prompt
+
+
+def test_twice_refuted_day_reaches_the_human(ledger, tmp_path, ground):
+    _seed_days(ledger, 1)
+    maker = MockProvider(id="mock:s")
+    for i in range(3):
+        maker.enqueue_text(_day_json(f"reading {i}"))
+    vprov = MockProvider(id="mock:haiku")
+    for _ in range(12):
+        vprov.enqueue_text("REFUTED\nno")
+    panel = VerifierPanel("onboard-panel", vprov, ledger=ledger,
+                          rule_verifier=RuleVerifier("onboard-panel:floor",
+                                                     ledger, ground))
+    ritual = _ritual(ledger, tmp_path, ground, maker, verifier=panel)
+    ritual.learning_pass()                        # read 1 → refuted (rework 0)
+    ritual.learning_pass()                        # machine re-read (rework 1) → refuted
+    ritual.learning_pass()                        # machine re-read (rework 2) → refuted
+    # the machine's allowance is spent — the day is now the HUMAN's call
+    assert pending_review_day(ledger) == "2026-07-10"
+    review_day(ledger, "2026-07-10", "yes", "alex")
+    assert day_review_state(ledger, "2026-07-10") == "approved"
+
+
 def test_counts_only_digest_never_gates(ledger, tmp_path, ground):
     _seed_days(ledger, 2)
     ritual = _ritual(ledger, tmp_path, ground, provider=None)

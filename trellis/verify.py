@@ -320,7 +320,12 @@ class ModelVerifier:
                        f"EVIDENCE:\n{evidence_text}"}],
         )
         lines = (reply.text or "").strip().splitlines()
-        first = lines[0].strip().upper() if lines else ""  # blank reply → INSUFFICIENT, never a crash
+        # STRIP MARKDOWN before matching: a lens that answers "**VERIFIED**"
+        # was being recorded INSUFFICIENT (live catch, 2026-07-22). Letters
+        # only, exact token — "NOT VERIFIED" folds to NOTVERIFIED and still
+        # lands INSUFFICIENT, never a false pass.
+        import re as _re
+        first = (_re.sub(r"[^A-Za-z]", "", lines[0]).upper() if lines else "")
         status = {
             "VERIFIED": VerdictStatus.VERIFIED,
             "REFUTED": VerdictStatus.REFUTED,
