@@ -497,7 +497,10 @@ def _run_runner(runner, client, cadence) -> None:  # pragma: no cover - interact
         iso, surfaces, _note = _discord_read_scope(iso, client, runner.ledger)
         runner.discord = DiscordPoll(client, iso, IdentityRegistry(runner.ledger),
                                      runner.ledger, surfaces=surfaces)
-    runner.run(handlers={}, cadence=cadence)
+    handlers, notes = _witness_handlers(runner.ledger)   # D44
+    for n in notes:
+        print(f"  · {n}")
+    runner.run(handlers=handlers, cadence=cadence)
 
 
 def _print_health(runner) -> None:
@@ -517,10 +520,13 @@ def _print_health(runner) -> None:
 def cmd_tick(args: argparse.Namespace) -> int:
     config.load_dotenv()
     runner = _build_runner()
-    # No model handlers are wired here (that seat needs a configured provider); the
-    # tick still sweeps orphans, registers the standing schedules, enforces the
-    # budget, and reports health — the crash-safe scaffolding runs offline.
-    report = runner.tick(handlers={})
+    # D44: the witness cycle is seated when an EMP + model seat are configured;
+    # unconfigured, the tick still sweeps orphans, registers schedules, enforces
+    # the budget, and reports health — and SAYS why the witness isn't seated.
+    handlers, notes = _witness_handlers(runner.ledger)
+    for n in notes:
+        print(f"  · {n}")
+    report = runner.tick(handlers=handlers)
     if report["swept"]:
         print(f"swept {len(report['swept'])} orphaned loop start(s) "
               "(prior hard-kill → recorded as protocol_violation)")
@@ -621,6 +627,80 @@ def cmd_discord(args: argparse.Namespace) -> int:
     # and is not opened here (never in tests).
     DiscordGatewayConnection(gateway, bot_token=token).run()
     return 0
+
+
+# ---------- D44: seat the Witness cycle under the standing schedules ----------
+
+
+def _witness_handlers(ledger, provider=None, verifier=None):
+    """D44 (Clare's sketch, ratified 2026-07-22): a handler factory that seats
+    `Witness.witness_cycle` under the runner's standing `witness.cycle`
+    schedule — the gap where `handlers={}` met DEFAULT_SCHEDULES.
+
+    Returns (handlers, notes). Degrades honestly: no EMP or no model seat →
+    ({}, [why]) — the schedules stay visibly "registered but never fired"
+    rather than silently half-wired. The EMP comes from TRELLIS_EMP_PATH (the
+    instance identity, e.g. examples/chief-of-staff-emp.md — D46/D50);
+    `provider`/`verifier` are injectable for tests."""
+    from .emp import load_emp
+    notes = []
+    raw = os.environ.get("TRELLIS_EMP_PATH", "").strip() or "examples/witness-emp.md"
+    emp_path = Path(raw).expanduser()
+    if not emp_path.is_file():
+        return {}, [f"witness not seated: no EMP at {emp_path} (set TRELLIS_EMP_PATH)"]
+    if provider is None:
+        try:
+            from .providers import provider_from_env
+            provider = provider_from_env()
+        except Exception as e:
+            return {}, [f"witness not seated: model seat unavailable ({e})"]
+    if verifier is None:
+        try:
+            from .panel import VerifierPanel
+            from .providers.factory import verifier_provider_from_env
+            from .verify import RuleVerifier
+            vseat = verifier_provider_from_env(provider)
+            verifier = VerifierPanel("witness-panel", vseat, ledger=ledger,
+                                     rule_verifier=RuleVerifier(
+                                         "witness-panel:floor", ledger))
+        except Exception as e:
+            verifier = None
+            notes.append(f"witness runs WITHOUT the decision panel ({e}) — "
+                         "opinions still floor-verified, not panel-judged (D34 "
+                         "degraded, said out loud)")
+
+    from .agent import Event, Witness
+    from .memory import Workspace
+    from .scheduler import LedgerScheduler
+    from .surfaces import ConversationKey, Surface
+    emp = load_emp(emp_path)
+    workspace = Workspace(_workspace_root(), ledger)
+    key = ConversationKey(agent="trellis", surface=Surface.CHANNEL,
+                          scope="witness", human="")
+    witness = Witness(emp, provider, ledger, workspace, key,
+                      decision_verifier=verifier)
+    sched = LedgerScheduler(ledger)
+
+    def cycle():
+        # the events are what arrived SINCE the last cycle (write-time), newest
+        # 30 — bounded, and a quiet tick spends nothing on the model.
+        last = sched.last_fired("witness.cycle")
+        events = []
+        for e in ledger.active("discord_message"):
+            if last is not None and e.stamp.write_time <= last:
+                continue
+            events.append(Event(source=e.author,
+                                content=str(e.body.get("content", ""))[:500],
+                                event_time=e.stamp.event_time))
+        if not events:
+            return "no_new_events"
+        return witness.witness_cycle(events[-30:])
+
+    notes.append(f"witness seated: EMP {emp.name!r} · maker "
+                 f"{getattr(provider, 'id', '?')}"
+                 + (f" · panel on {len(getattr(verifier, 'lenses', ()))} lenses"
+                    if verifier else ""))
+    return {"witness.cycle": cycle}, notes
 
 
 # ---------- begin (the onboarding ritual, D12's purest expression) ----------
@@ -895,13 +975,19 @@ def cmd_begin(args: argparse.Namespace) -> int:
     specs = runner.DEFAULT_SCHEDULES + (
         (ONBOARD_SCHEDULE, onboard_every, "the onboarding learning ritual — "
          "map, verify, surface unknowns"),)
+    # D44: the Witness cycle runs beside the onboarding loop — the coordinated
+    # set is one process: poll + backfill + learning + witness + verifier panel.
+    witness_handlers, wnotes = _witness_handlers(ledger)
+    for n in wnotes:
+        print(f"  · {n}")
+    all_handlers = {ONBOARD_SCHEDULE: handler, **witness_handlers}
     print(f"\ntrellis begin — learning in the background every "
           f"{onboard_every.total_seconds():.0f}s while this process lives "
           "(Ctrl-C to stop; the ledger resumes me)")
     try:
         import time
         while True:
-            runner.tick(handlers={ONBOARD_SCHEDULE: handler}, specs=specs)
+            runner.tick(handlers=all_handlers, specs=specs)
             time.sleep(cadence.total_seconds())
     except KeyboardInterrupt:  # pragma: no cover - interactive
         print("\nstopped — everything learned is on the record; a restart "
