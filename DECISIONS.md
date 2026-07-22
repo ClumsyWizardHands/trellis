@@ -998,6 +998,62 @@ authenticated, maker≠approver, lifecycle-gated `Outbox.approve/fire` path the 
 
 ---
 
+## D39 — Subscription seats run uncapped; a dollar budget only fits metered seats ✅ fresh
+
+**Decision:** the daily dollar budget applies only to **per-token** seats (API keys). A
+**subscription** seat — `codex` (ChatGPT login), or `claude` running on the Max login
+rather than an API key — runs with **no daily cap by default**: a dollar ceiling over a
+flat subscription is a fiction, and enforcing one would only fabricate spend records.
+Explicit settings still win both ways: `TRELLIS_DAILY_BUDGET=<number>` caps any seat,
+`off` disables the cap on a metered seat. The metered default stays the conservative
+$5/day ("$300 in two days" is what an unbounded metered agent does).
+
+**Triangulation:**
+1. Alex, 2026-07-22 (the onboarding wiring): "There should be no daily budget because
+   we log in using max or codex accounts."
+2. The Fable onboarding build's finding (docs/ONBOARDING-NOTES-FROM-FABLE.md (a)1):
+   nothing ever called `DayBudget.charge()`, so the cap was already gating a sum that
+   stayed zero — on subscription seats the honest fix is no cap, not fake charges.
+3. D37 (the ledger-derived windowed budget) is unchanged for metered seats — the
+   mechanism stays; only its applicability is scoped to where dollars actually meter.
+
+**Consequence:** `runner.budget_from_env` returns None for subscription seats (and for
+an explicit `off`); `tests/test_read_scope_and_budget.py` pins all six cases. The
+remaining gap — metered seats still have no `charge()` callers — stays open (see the
+notes file's D-proposals).
+
+---
+
+## D40 — The read scope is what trellis's own bot can see, granted in Discord ✅ fresh
+
+**Decision:** with `TRELLIS_DISCORD_GUILD` set (and `TRELLIS_READ_SURFACES` unset or
+`auto`), trellis reads **everything its own bot identity can see in that server** —
+every public channel, plus every private channel the bot is invited into. The grant
+lives where the surfaces live: adding/removing the bot from a channel **in Discord is
+the allowlist edit**; no hand-typed id list to drift. Structurally D30 is unchanged —
+a startup discovery sweep derives the id list (probing each channel; a refusal is
+recorded as `no_access`, never silently retried), lands the result on the ledger as a
+`surface_discovery` event, and the discovered ids become the `Isolation` allowlist that
+every downstream gate already enforces. An explicit `TRELLIS_READ_SURFACES` list still
+wins when given.
+
+**Triangulation:**
+1. Alex, 2026-07-22: "trellis should be able to read … everything that's public or
+   everything that it's part of." The bot's own channel visibility is exactly that set.
+2. D30's principle (isolation by identity + allowlist) is preserved: the allowlist is
+   still explicit in the running process; only its SOURCE moved from .env to Discord's
+   own permission grants — which the human already controls channel-by-channel.
+3. D38 (private-server launch): on the owner's own server, hand-listing channel ids was
+   friction without safety — the bot's invite list is the same human gate, kept current.
+
+**Consequence:** `DiscordClient.list_guild_channels`,
+`backfill.discover_guild_read_surfaces` (+ the `surface_discovery` ledger record),
+`cli._discord_read_scope` wired into `trellis begin` and `trellis run`. DMs are NOT
+covered by discovery (REST cannot enumerate DM channels) — DM ingestion still arrives
+via the gateway/poll paths under D32's scoping.
+
+---
+
 ## ⏳ Watch list (decisions deliberately NOT taken)
 
 - **W1 — No skill marketplace / no auto-installed skills.** [OPENCLAW] supply-chain

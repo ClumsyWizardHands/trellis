@@ -252,6 +252,27 @@ class DiscordClient:
             thread_id=thread_id, message_id=str(row.get("id", "") or ""),
             is_dm=is_dm, author_id=author_id)
 
+    def list_guild_channels(self, guild_id: str) -> List[dict]:
+        """GET /guilds/{id}/channels → [{'id','name','type'}, …]. RAW transport:
+        it returns what the API lists — including channels the bot cannot open.
+        What trellis may actually READ stays upstream (isolation + the D40
+        discovery probe in backfill.discover_guild_read_surfaces)."""
+        raw = self._request("GET", f"/guilds/{guild_id}/channels")
+        rows = raw if isinstance(raw, list) else []
+        out: List[dict] = []
+        for r in rows:
+            if not isinstance(r, dict):
+                continue
+            try:
+                ctype = int(r.get("type", -1))
+            except (TypeError, ValueError):
+                ctype = -1
+            cid = str(r.get("id", "") or "")
+            if cid:
+                out.append({"id": cid, "name": str(r.get("name", "") or ""),
+                            "type": ctype})
+        return out
+
     def fetch_reactions(self, channel_id: str, message_id: str,
                         emoji: str, limit: int = 100) -> List[str]:
         """GET the users who reacted to a message with `emoji`; return their

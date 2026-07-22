@@ -138,12 +138,70 @@ def cmd_doctor(args: argparse.Namespace) -> int:
     else:
         r.line("WARN", "portal auth", "no secret — portal mints a one-time console token each boot")
 
+    # --- Google Drive (the onboarding source; honest about the grant state) ---
+    _check_google(r)
+
+    # --- transcript + document folders (each may be a comma-separated list) ---
+    for label, var in (("transcripts", "TRELLIS_TRANSCRIPTS_DIR"),
+                       ("docs folders", "TRELLIS_DOCS_DIRS")):
+        dirs = [p.strip() for p in os.environ.get(var, "").split(",") if p.strip()]
+        if not dirs:
+            r.line("SKIP", label, f"{var} unset")
+            continue
+        for d in dirs:
+            if Path(d).expanduser().is_dir():
+                r.line("OK", label, d)
+            else:
+                r.line("FAIL", label, f"{d} is not a directory")
+
+    # --- onboarding consent (has the human said yes to learning?) ---
+    _check_onboarding(r)
+
     print()
     if r.failed:
         print("NOT READY — fix the ✗ lines above.")
         return 1
     print("READY (for what is configured; SKIP lines are simply not set up yet).")
     return 0
+
+
+def _check_google(r: _Report) -> None:
+    """The Google surface has a real intermediate state — code wired, human
+    grant pending — and doctor reports it as exactly that, never READY."""
+    from .google_source import google_status
+    st = google_status()
+    if not (st["client_secret_configured"] or st["token_store_configured"]
+            or st["folder_configured"]):
+        r.line("SKIP", "Google Drive", "TRELLIS_GOOGLE_* / TRELLIS_DRIVE_FOLDER unset")
+        return
+    if st["ready"]:
+        # config + token present; no network call was made, so this is
+        # config-verified, not reachability-verified — say so.
+        r.line("OK", "Google Drive",
+               "granted (token store present; reachability checked at first read)")
+    else:
+        r.line("WARN", "Google Drive", f"wired, awaiting the human's grant — {st['detail']}")
+
+
+def _check_onboarding(r: _Report) -> None:
+    from .ledger import Ledger
+    from .onboard import consent_state
+    ledger_path = Path(config.ledger_path())
+    if not ledger_path.is_file():
+        r.line("SKIP", "onboarding", "no ledger yet — run `trellis begin`")
+        return
+    try:
+        state = consent_state(Ledger(ledger_path))
+    except Exception as e:
+        r.line("WARN", "onboarding", f"could not read consent state: {e}")
+        return
+    if state == "granted":
+        r.line("OK", "onboarding", "consent granted — learning may run")
+    elif state == "declined":
+        r.line("WARN", "onboarding", "consent DECLINED — trellis will not read; "
+                                     "run `trellis begin` to ask again")
+    else:
+        r.line("SKIP", "onboarding", "not begun — run `trellis begin`")
 
 
 def _check_ledger(r: _Report) -> None:
@@ -418,15 +476,21 @@ def _discord_client_from_env(iso=None, urlopen=None):
 
 
 def _run_runner(runner, client, cadence) -> None:  # pragma: no cover - interactive loop
-    """Drive the always-on loop, forwarding a configured DiscordClient to the runner's
-    poll step ONLY if this runner build accepts it (feature-detected on `run`'s
-    signature). Forward-compatible: until the Stage-2 poll unit adds `poll_client`,
-    this is a no-op; once it does, `trellis run` polls Discord each tick."""
-    import inspect
-    kwargs = {"handlers": {}, "cadence": cadence}
-    if client is not None and "poll_client" in inspect.signature(runner.run).parameters:
-        kwargs["poll_client"] = client
-    runner.run(**kwargs)
+    """Drive the always-on loop. A configured DiscordClient is attached as the
+    runner's poll step (runner.discord), so each tick actually polls the
+    allowlisted surfaces — the prior feature-detection probed for a
+    `poll_client` parameter Runner.run never grew, so `trellis run` claimed
+    'Discord poll wired' while never polling (noticed in the onboarding build;
+    see docs/ONBOARDING-NOTES-FROM-FABLE.md)."""
+    if client is not None and runner.discord is None:
+        from .isolation import Isolation
+        from .registry import IdentityRegistry
+        from .runner import DiscordPoll
+        iso = Isolation.from_env()
+        iso, surfaces, _note = _discord_read_scope(iso, client, runner.ledger)
+        runner.discord = DiscordPoll(client, iso, IdentityRegistry(runner.ledger),
+                                     runner.ledger, surfaces=surfaces)
+    runner.run(handlers={}, cadence=cadence)
 
 
 def _print_health(runner) -> None:
@@ -552,6 +616,298 @@ def cmd_discord(args: argparse.Namespace) -> int:
     return 0
 
 
+# ---------- begin (the onboarding ritual, D12's purest expression) ----------
+
+
+def _env_list(name: str) -> list:
+    """A comma-separated env var as a clean list — several transcript folders,
+    several granted Drive folder ids. Empty/unset → []."""
+    return [p.strip() for p in os.environ.get(name, "").split(",") if p.strip()]
+
+
+def _workspace_root() -> Path:
+    """The map's home: the Obsidian vault when configured (the record's
+    navigable face, D21), else a workspace beside the ledger."""
+    vp = config.vault_path()
+    if vp:
+        return Path(vp).expanduser()
+    return Path(config.ledger_path()).parent / "workspace"
+
+
+def _discord_read_scope(iso, client, ledger):
+    """Resolve the READ scope (D40). With TRELLIS_DISCORD_GUILD set and
+    TRELLIS_READ_SURFACES unset or `auto`, the allowlist is DERIVED from what
+    trellis's own bot identity can actually see in that server — every public
+    channel plus every private one it was invited into; the grant is edited in
+    Discord, not in .env. An explicit id list still wins when given. Returns
+    (iso, surfaces, note) — surfaces is None when no discovery ran."""
+    reads_raw = os.environ.get("TRELLIS_READ_SURFACES", "").strip().lower()
+    guild = os.environ.get("TRELLIS_DISCORD_GUILD", "").strip()
+    if client is None or not guild or (reads_raw and reads_raw != "auto"):
+        return iso, None, None
+    from .backfill import discover_guild_read_surfaces
+    from .isolation import Isolation, SurfaceAllowlist
+    try:
+        disc = discover_guild_read_surfaces(client, ledger, guild)
+    except Exception as e:
+        return iso, None, (f"guild discovery failed ({e}) — falling back to "
+                           "the explicit TRELLIS_READ_SURFACES list")
+    iso2 = Isolation(identity=iso.identity,
+                     allow=SurfaceAllowlist(read=disc.read_ids,
+                                            act=iso.allow.act))
+    note = (f"read scope from the server itself: {len(disc.surfaces)} "
+            f"channel(s) visible to my bot identity"
+            + (f"; {len(disc.no_access)} refused (recorded)" if disc.no_access else ""))
+    return iso2, list(disc.surfaces), note
+
+
+def _onboard_sources_desc(iso) -> list:
+    desc = []
+    has_token = bool(os.environ.get("TRELLIS_DISCORD_TOKEN", "").strip())
+    guild = os.environ.get("TRELLIS_DISCORD_GUILD", "").strip()
+    reads_raw = os.environ.get("TRELLIS_READ_SURFACES", "").strip().lower()
+    if has_token and guild and (not reads_raw or reads_raw == "auto"):
+        desc.append("the Discord server's history — everything my own bot "
+                    "identity can see there (every public channel, and any "
+                    "private one it was invited into)")
+    elif has_token and iso.allow.read:
+        desc.append(f"the Discord history of {len(iso.allow.read)} allowlisted "
+                    "channel(s) — and nothing outside that list")
+    for d in _env_list("TRELLIS_TRANSCRIPTS_DIR"):
+        desc.append(f"the transcripts in {d}")
+    for d in _env_list("TRELLIS_DOCS_DIRS"):
+        desc.append(f"the documents in {d}")
+    gfolders = _env_list("TRELLIS_DRIVE_FOLDER")
+    if gfolders:
+        desc.append(f"{len(gfolders)} granted Google Drive folder(s) "
+                    f"({', '.join(gfolders)})")
+    if not desc:
+        desc.append("nothing yet — no sources are configured; I would sit "
+                    "ready until you grant one")
+    return desc
+
+
+def _build_onboarding(ledger, iso, registry, seed_terms):
+    """Construct the coordinated set: the maker seat, the independent Haiku
+    verifier panel, the source adapters, and the Discord backfill — each
+    optional, each honest about its absence. Returns (ritual, sources,
+    backfill, client, notes) where notes are human-readable wiring truths."""
+    from .memory import Workspace
+    from .onboard import OnboardingRitual
+    from .verify import RuleVerifier
+    notes = []
+
+    provider = None
+    verifier = None
+    try:
+        from .providers import provider_from_env
+        provider = provider_from_env()
+        notes.append(f"model seat: {getattr(provider, 'id', '?')}")
+    except Exception as e:
+        notes.append(f"model seat unavailable ({e}) — I will trace lineage "
+                     "deterministically but propose no meanings")
+    if provider is not None:
+        try:
+            from .providers.factory import verifier_provider_from_env
+            from .panel import VerifierPanel
+            vseat = verifier_provider_from_env(provider)
+            verifier = VerifierPanel(
+                "onboard-panel", vseat, ledger=ledger,
+                rule_verifier=RuleVerifier("onboard-panel:floor", ledger))
+            notes.append(f"verifier panel: 4 lenses on {getattr(vseat, 'id', '?')} "
+                         "(refute-by-default; maker≠verifier)")
+        except Exception as e:
+            notes.append(f"verifier seat unavailable ({e}) — mapped meanings "
+                         "will STAY unresolved rather than self-certify")
+
+    sources = []
+    tdirs = _env_list("TRELLIS_TRANSCRIPTS_DIR")
+    ddirs = _env_list("TRELLIS_DOCS_DIRS")
+    if tdirs or ddirs:
+        from .transcripts import TranscriptFolderAdapter
+        for d in tdirs:
+            sources.append(TranscriptFolderAdapter(d))
+        for d in ddirs:
+            # a documents folder (principles checks, protocols, reference docs)
+            # rides the same adapter with an HONEST kind — not everything on
+            # disk is a transcript.
+            sources.append(TranscriptFolderAdapter(d, source="docs",
+                                                   kind="document"))
+    gfolders = _env_list("TRELLIS_DRIVE_FOLDER")
+    if gfolders:
+        from .google_source import GoogleDriveAdapter, google_status
+        st = google_status()
+        for f in gfolders:
+            sources.append(GoogleDriveAdapter(folder_id=f))
+        if not st["ready"]:
+            notes.append(f"Google Drive wired, awaiting the human's grant — {st['detail']}")
+
+    backfill = None
+    surfaces = None
+    client = _discord_client_from_env(iso)
+    if client is not None:
+        iso, surfaces, scope_note = _discord_read_scope(iso, client, ledger)
+        if scope_note:
+            notes.append(scope_note)
+        from .backfill import DiscordBackfill
+        backfill = DiscordBackfill(client, iso, registry, ledger,
+                                   surfaces=surfaces)
+        notes.append(f"Discord backfill: {len(iso.allow.read)} read surface(s), "
+                     "oldest→newest, resumable")
+
+    workspace = Workspace(_workspace_root(), ledger)
+    ritual = OnboardingRitual(ledger, workspace, provider=provider,
+                              verifier=verifier, registry=registry,
+                              seed_terms=seed_terms)
+    return ritual, sources, backfill, client, iso, surfaces, notes
+
+
+def _print_pass_summary(summary: dict) -> None:
+    print(f"\n— learning pass: {summary['status']} —")
+    if summary.get("backfill"):
+        b = summary["backfill"]
+        print(f"  backfill: {'caught up' if b.get('all_caught_up') else 'in progress'} "
+              f"({len(b.get('surfaces', []))} surface(s))")
+    for name, res in (summary.get("ingested") or {}).items():
+        print(f"  {name}: {res['processed']} new, {res['corrected']} corrected, "
+              f"{res['skipped_duplicate']} already known")
+    for a in summary.get("awaiting", []):
+        print(f"  ! {a['source']}: {a['why']}")
+    minted = [t for t in summary.get("terms_minted", []) if t]
+    if minted:
+        print(f"  curious about: {', '.join(minted)}")
+    for p in summary.get("terms_pursued", []):
+        print(f"  · '{p['term']}' — {p['outcome']}")
+    print(f"  open unknowns on the record: {summary.get('open_unknowns', 0)}")
+
+
+def cmd_begin(args: argparse.Namespace) -> int:
+    """The initialize command: introduce, ask consent, then bring up the whole
+    coordinated set (backfill + sources + learning loop + verifier panel) under
+    the runner. `--once` runs a single pass and exits; default stays resident."""
+    config.load_dotenv()
+    from datetime import timedelta
+
+    from .isolation import Isolation
+    from .ledger import Ledger
+    from .onboard import (ONBOARD_SCHEDULE, consent_state, introduction_text,
+                          onboarding_handler, record_consent,
+                          record_introduction)
+    from .registry import IdentityRegistry
+    from .runner import DiscordPoll, budget_from_env, default_cadence
+
+    ledger = Ledger(config.ledger_path())
+    iso = Isolation.from_env()
+    registry = IdentityRegistry(ledger)
+    human = os.environ.get("TRELLIS_HUMAN", "operator").strip() or "operator"
+
+    intro = introduction_text(_onboard_sources_desc(iso))
+    state = consent_state(ledger)
+    if state == "granted":
+        print("(consent is already on the record — resuming the learning "
+              "loop; nothing needs re-asking)\n")
+    else:
+        print(intro + "\n")
+        answer = (args.answer or input("> ")).strip().lower()
+        granted = answer in ("y", "yes")
+        record_consent(ledger, human, granted,
+                       note=f"answered {answer!r} at the terminal")
+        if not granted:
+            record_introduction(ledger, "trellis-onboard", intro)
+            print("\nUnderstood — I won't read anything. The 'no' is on the "
+                  "record; run `trellis begin` again if you change your mind.")
+            return 0
+        # If an ACT surface is armed, the introduction is also STAGED as a
+        # Discord post — it reaches the server only after the owner's ✅
+        # (stage-don't-fire, refusal #5; onboarding posts nothing on its own).
+        staged_id = None
+        if iso.allow.act:
+            from .stage import Outbox, StagedAction
+            from .surfaces import ConversationKey, Surface
+            target = sorted(iso.allow.act)[0]
+            staged_id = Outbox(ledger, iso=iso).stage(StagedAction(
+                kind="discord_post", target=target, content=intro,
+                created_by="trellis-onboard",
+                destination=ConversationKey(agent=iso.identity.name,
+                                            surface=Surface.CHANNEL,
+                                            scope=target, human="")))
+            print(f"\n(the introduction is STAGED for #{target} — it posts only "
+                  "after your ✅; nothing has been sent)")
+        record_introduction(ledger, "trellis-onboard", intro,
+                            staged_action_id=staged_id)
+        print("\nThank you. Beginning — I'll read only what you've granted, "
+              "and I'll keep my open questions visible.\n")
+
+    seed_terms = [t.strip() for t in
+                  os.environ.get("TRELLIS_ONBOARD_TERMS", "").split(",")
+                  if t.strip()]
+    ritual, sources, backfill, client, iso, surfaces, notes = _build_onboarding(
+        ledger, iso, registry, seed_terms)
+    for n in notes:
+        print(f"  · {n}")
+
+    handler = onboarding_handler(ritual, sources=sources, backfill=backfill)
+    summary = handler()                          # the first pass, right now
+    _print_pass_summary(summary)
+
+    if getattr(args, "once", False):
+        print("\n(--once: single pass done. `trellis begin` again, or "
+              "`trellis run`, to keep learning.)")
+        return 0
+
+    runner = _build_runner()
+    if client is not None:
+        runner.discord = DiscordPoll(client, iso, registry, ledger,
+                                     surfaces=surfaces)
+    cadence = default_cadence()
+    raw = os.environ.get("TRELLIS_ONBOARD_SECONDS", "").strip()
+    onboard_every = timedelta(seconds=float(raw)) if raw else timedelta(minutes=30)
+    specs = runner.DEFAULT_SCHEDULES + (
+        (ONBOARD_SCHEDULE, onboard_every, "the onboarding learning ritual — "
+         "map, verify, surface unknowns"),)
+    print(f"\ntrellis begin — learning in the background every "
+          f"{onboard_every.total_seconds():.0f}s while this process lives "
+          "(Ctrl-C to stop; the ledger resumes me)")
+    try:
+        import time
+        while True:
+            runner.tick(handlers={ONBOARD_SCHEDULE: handler}, specs=specs)
+            time.sleep(cadence.total_seconds())
+    except KeyboardInterrupt:  # pragma: no cover - interactive
+        print("\nstopped — everything learned is on the record; a restart "
+              "picks up where this left off.")
+    return 0
+
+
+# ---------- google (the human's one-time browser grant) ----------
+
+
+def cmd_google(args: argparse.Namespace) -> int:
+    config.load_dotenv()
+    from .google_source import GoogleNotGranted, google_status, run_grant_flow
+    if args.action == "status":
+        st = google_status()
+        for k, v in st.items():
+            print(f"  {k}: {v}")
+        return 0
+    # action == "grant" — the HUMAN's browser approval; trellis passes paths only
+    cs = os.environ.get("TRELLIS_GOOGLE_CLIENT_SECRET", "").strip()
+    ts = os.environ.get("TRELLIS_GOOGLE_TOKEN_STORE", "").strip()
+    if not cs or not ts:
+        print("set TRELLIS_GOOGLE_CLIENT_SECRET (the Desktop-app OAuth client "
+              "JSON path) and TRELLIS_GOOGLE_TOKEN_STORE (where Google's client "
+              "should keep the token) in .env first", file=sys.stderr)
+        return 1
+    try:
+        path = run_grant_flow(cs, ts)
+    except GoogleNotGranted as e:
+        print(f"✗ {e}", file=sys.stderr)
+        return 1
+    print(f"✓ granted — Google's client wrote the token store at {path}. "
+          "trellis never saw the secret.")
+    return 0
+
+
 # ---------- web ----------
 
 def cmd_web(args: argparse.Namespace) -> int:
@@ -585,11 +941,21 @@ def main(argv=None) -> int:
                    help="args passed through to trellis-web (e.g. --port 8001)")
     sub.add_parser("discord", help="run the in-Discord approval gesture "
                                    "(needs a trellis-owned bot token + ACT allowlist)")
+    b = sub.add_parser("begin", aliases=["onboard"],
+                       help="introduce, ask consent, then map this place — "
+                            "the begin-learning ritual (stays resident)")
+    b.add_argument("--once", action="store_true",
+                   help="run a single learning pass and exit (no resident loop)")
+    b.add_argument("--answer", default=None, help=argparse.SUPPRESS)  # tests only
+    g = sub.add_parser("google", help="the human's one-time Google grant "
+                                      "(browser OAuth; trellis never sees the secret)")
+    g.add_argument("action", choices=["grant", "status"])
 
     args = ap.parse_args(argv)
     return {"init": cmd_init, "doctor": cmd_doctor, "demo": cmd_demo,
             "tick": cmd_tick, "run": cmd_run, "web": cmd_web,
-            "discord": cmd_discord}[args.cmd](args)
+            "discord": cmd_discord, "begin": cmd_begin, "onboard": cmd_begin,
+            "google": cmd_google}[args.cmd](args)
 
 
 if __name__ == "__main__":  # pragma: no cover

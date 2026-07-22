@@ -1,0 +1,418 @@
+"""test_onboard.py — the begin-learning ritual (brief §2), fully offline.
+
+The properties pinned (do NOT weaken):
+
+  * CONSENT IS A REAL GATE: before the human's yes, a learning pass reads
+    NOTHING — no source is even asked to discover; the refusal is a typed,
+    ledgered blocked outcome. The yes and the no are both attributed facts.
+  * NEVER ASSUME MEANING: a loaded term becomes a curiosity NODE (folded, not
+    forked); its meaning is "known" only after independent verification
+    (maker≠verifier) or a human's confirmation. A model-proposed meaning is
+    confidence-CAPPED. A term with no evidence yields an honest DRY seek that
+    does not advance the question (D22).
+  * LINEAGE IS TRACED, deterministically: earliest use, latest use, voices,
+    casing shifts — from the record, with provenance folded FLOOR+OR.
+  * REFUTED → contested-and-escalated (D35), the question stays open.
+  * the map is written with provenance + confidence; "I don't yet understand X"
+    is a first-class output; a re-pass FOLDS (no duplicate questions, no
+    re-ingestion).
+"""
+
+from __future__ import annotations
+
+import json
+from datetime import datetime, timedelta, timezone
+
+import pytest
+
+from trellis.curiosity import QUESTION_KIND, QuestionLog, assumption_key
+from trellis.ingest import DiscordMessage
+from trellis.isolation import (AgentIdentity, Isolation, SurfaceAllowlist,
+                               ingest_scoped_discord_idempotent)
+from trellis.ledger import Ledger
+from trellis.memory import Workspace
+from trellis.onboard import (CONSENT_KIND, ONBOARD_SCHEDULE, PASS_KIND,
+                             TERM_OBSERVATION_KIND, OnboardingRitual, TermScout,
+                             consent_state, confirm_term_meaning,
+                             introduction_text, mint_term_curiosities,
+                             onboarding_handler, propose_meaning,
+                             record_consent, record_term_observation,
+                             resolve_term_if_verified, term_assumption,
+                             term_from_assumption, term_lineage,
+                             verify_term_understanding)
+from trellis.panel import VerifierPanel
+from trellis.providers.mock import MockProvider
+from trellis.registry import IdentityRegistry
+from trellis.verify import (CONTESTED_KIND, RuleVerifier, VerdictStatus,
+                            contested_items)
+
+CHAN = "chan-main"
+_T0 = datetime(2026, 7, 1, 9, 0, 0, tzinfo=timezone.utc)
+
+
+def _iso():
+    return Isolation(identity=AgentIdentity(name="trellis"),
+                     allow=SurfaceAllowlist(read=frozenset((CHAN,)),
+                                            act=frozenset()))
+
+
+def _seed_messages(ledger, texts_by_author):
+    """Land messages on the ledger through the real scoped idempotent bridge."""
+    msgs, i = [], 0
+    for author, texts in texts_by_author:
+        for t in texts:
+            i += 1
+            msgs.append(DiscordMessage(
+                author=author, content=t, posted_at=_T0 + timedelta(hours=i),
+                channel=CHAN, channel_name="main", message_id=str(1000 + i),
+                author_id=f"u-{author}"))
+    ingest_scoped_discord_idempotent(ledger, msgs, _iso(),
+                                     IdentityRegistry(ledger))
+
+
+EMPIRE_TEXTS = [
+    ("brett", ["the empire needs a garden not a factory",
+               "every empire decision flows through the ledger",
+               "an empire is what you tend, lowercase on purpose"]),
+    ("sarah", ["I still think the Empire framing confuses new folks",
+               "the empire map helped though"]),
+]
+
+
+def _ritual(ledger, tmp_path, ground, provider=None, verifier=None,
+            seed_terms=("empire",), scout=None):
+    ws = Workspace(tmp_path / "ws", ledger)
+    return OnboardingRitual(ledger, ws, ground=ground, provider=provider,
+                            verifier=verifier, registry=IdentityRegistry(ledger),
+                            seed_terms=list(seed_terms), scout=scout)
+
+
+def _grant(ledger):
+    record_consent(ledger, "alex", True)
+
+
+def _panel(ledger, replies):
+    prov = MockProvider(id="mock:haiku")
+    for r in replies:
+        prov.enqueue_text(r)
+    return VerifierPanel("onboard-panel", prov, ledger=ledger,
+                         rule_verifier=RuleVerifier("onboard-panel:floor", ledger,
+                                                    ledger.ground))
+
+
+# --------------------------------------------------------------------------- #
+# 1. introduction + consent — the human gate on starting to learn              #
+# --------------------------------------------------------------------------- #
+
+def test_introduction_is_genuine_and_names_the_recording(ledger):
+    text = introduction_text(["the Discord history of 2 channels"])
+    assert "May I begin?" in text
+    assert "recorded" in text                        # the D36 notice
+    assert "won't assume" in text or "not assume" in text.replace("won't", "not")
+
+
+def test_consent_lifecycle_latest_wins(ledger):
+    assert consent_state(ledger) == "unasked"
+    record_consent(ledger, "alex", True)
+    assert consent_state(ledger) == "granted"
+    record_consent(ledger, "alex", False, note="changed my mind")
+    assert consent_state(ledger) == "declined"       # a human may change their mind
+
+
+def test_consent_requires_a_real_identity(ledger):
+    from trellis.identity import InvalidIdentityError
+    with pytest.raises((InvalidIdentityError, ValueError)):
+        record_consent(ledger, "   ", True)
+
+
+def test_learning_pass_reads_nothing_before_consent(ledger, tmp_path, ground):
+    class SpyAdapter:
+        called = False
+        def discover(self):
+            SpyAdapter.called = True
+            return []
+
+    ritual = _ritual(ledger, tmp_path, ground)
+    summary = ritual.learning_pass(sources=[SpyAdapter()])
+    assert summary["status"] == "awaiting_consent"
+    assert SpyAdapter.called is False                # not even asked to discover
+    ends = [e for e in ledger.entries() if e.kind == "loop_run_end"]
+    assert ends and ends[-1].body["outcome"] == "blocked"
+    assert ends[-1].body.get("on") == "the human's consent to begin learning"
+
+
+# --------------------------------------------------------------------------- #
+# 2. the term scout — loaded terms become curiosity nodes, folded              #
+# --------------------------------------------------------------------------- #
+
+def test_scout_finds_seeds_recurring_words_and_phrases():
+    texts = []
+    for i in range(5):
+        texts.append(("brett", f"run the overnight soak again {i}"))
+        texts.append(("sarah", f"the overnight soak caught it {i}"))
+        texts.append(("clare", f"gruffle is fine {i}"))
+        texts.append(("brett", f"gruffle held {i}"))
+    scout = TermScout(seed_terms=["empire"], min_count=4, min_authors=2)
+    cands = {c.term: c for c in scout.scan(texts)}
+    assert "empire" in cands and cands["empire"].signal == "seeded"
+    assert "overnight soak" in cands                 # the canonical phrase
+    assert cands["overnight soak"].signal == "recurring-phrase"
+    assert "gruffle" in cands and cands["gruffle"].signal == "recurring"
+    assert "again" not in cands                      # single-author / stopword-ish
+
+
+def test_scout_records_case_variants_as_a_signal():
+    texts = [("brett", "the empire grows"), ("brett", "empire first"),
+             ("sarah", "the Empire confuses me"), ("sarah", "empire it is"),
+             ("clare", "empire everywhere")]
+    scout = TermScout(min_count=4, min_authors=2)
+    cands = {c.term: c for c in scout.scan(texts)}
+    assert cands["empire"].case_variants == {"empire": 4, "Empire": 1}
+
+
+def test_minting_folds_instead_of_forking(ledger, ground):
+    qlog = QuestionLog(ledger, ground)
+    scout = TermScout(seed_terms=["empire"])
+    cands = scout.scan([])
+    mint_term_curiosities(qlog, cands, "trellis-onboard", ground)
+    mint_term_curiosities(qlog, cands, "trellis-onboard", ground)   # re-scan
+    open_qs = [q for q in qlog.open_questions()
+               if term_from_assumption(q.body.get("assumption", ""))]
+    assert len(open_qs) == 1                          # one node, re-asked
+    assert open_qs[0].body["reasked"] == 1
+
+
+# --------------------------------------------------------------------------- #
+# 3. lineage — how the meaning came to be                                      #
+# --------------------------------------------------------------------------- #
+
+def test_term_lineage_traces_first_latest_voices_and_casing(ledger, ground):
+    _seed_messages(ledger, EMPIRE_TEXTS)
+    lin = term_lineage(ledger, "empire")
+    assert lin.occurrences == 5                       # one per message that uses it
+    assert lin.first_use["author"] == "brett"
+    assert "garden not a factory" in lin.first_use["excerpt"]
+    assert lin.latest_use["author"] == "sarah"
+    assert lin.users == ["brett", "sarah"]            # order of first use
+    assert lin.case_variants["empire"] == 4 and lin.case_variants["Empire"] == 1
+    assert lin.entry_ids                              # openable evidence
+
+
+def test_lineage_matches_phrases_case_insensitively(ledger, ground):
+    _seed_messages(ledger, [("brett", ["the Overnight Soak finished",
+                                       "an overnight soak takes a day"])])
+    lin = term_lineage(ledger, "overnight soak")
+    assert lin.occurrences == 2
+    assert set(lin.case_variants) == {"Overnight Soak", "overnight soak"}
+
+
+# --------------------------------------------------------------------------- #
+# 4. the meaning discipline — verified or human-confirmed, never assumed       #
+# --------------------------------------------------------------------------- #
+
+def _observed(ledger, ws, qlog, ground, proposed=None):
+    _grant(ledger)
+    _seed_messages(ledger, EMPIRE_TEXTS)
+    mint_term_curiosities(qlog, TermScout(seed_terms=["empire"]).scan([]),
+                          "trellis-onboard", ground)
+    lin = term_lineage(ledger, "empire")
+    return record_term_observation(ledger, ws, qlog, "empire", lin,
+                                   author="trellis-onboard", ground=ground,
+                                   proposed=proposed)
+
+
+def test_observation_folds_records_seek_and_caps_model_confidence(
+        ledger, tmp_path, ground):
+    ws = Workspace(tmp_path / "ws", ledger)
+    qlog = QuestionLog(ledger, ground)
+    obs = _observed(ledger, ws, qlog, ground,
+                    proposed={"meaning": "the tended whole of the team's work",
+                              "confidence": 0.99, "unsure": "why lowercase"})
+    # curiosity, not confabulation: an unconfirmed model meaning is CAPPED
+    assert obs.body["confidence"] == 0.7
+    # provenance folded upward, honestly fallible
+    assert obs.body["provenance"]["transcript_fallible"] is True
+
+    # the non-dry seek ties the map-move to THIS question (D22)
+    seeks = [e for e in ledger.entries() if e.kind == "seek"]
+    assert seeks and seeks[-1].body["map_changed"] is True
+    assert obs.id in seeks[-1].body["delta_refs"]
+
+    # a re-trace FOLDS onto the same observation node
+    lin2 = term_lineage(ledger, "empire")
+    obs2 = record_term_observation(ledger, ws, qlog, "empire", lin2,
+                                   author="trellis-onboard", ground=ground)
+    live = [e for e in ledger.active(TERM_OBSERVATION_KIND)]
+    assert len(live) == 1 and live[0].id == obs2.id
+
+    # the map note exists beside it, carrying the confidence
+    note = ws.read("map/terms/empire.md")
+    assert "confidence" in note and "Lineage" in note
+
+
+def test_meaning_resolves_only_on_verified(ledger, tmp_path, ground):
+    ws = Workspace(tmp_path / "ws", ledger)
+    qlog = QuestionLog(ledger, ground)
+    obs = _observed(ledger, ws, qlog, ground,
+                    proposed={"meaning": "the tended whole", "confidence": 0.6})
+    akey = assumption_key(term_assumption("empire"))
+
+    # an INSUFFICIENT panel does NOT close the question
+    verdict = verify_term_understanding(
+        ledger, obs, "trellis-onboard",
+        _panel(ledger, ["INSUFFICIENT\ncannot tell"] * 4))
+    assert verdict.status == VerdictStatus.INSUFFICIENT
+    assert resolve_term_if_verified(qlog, "empire", obs, verdict,
+                                    "trellis-onboard") is False
+    assert any(q.body.get("assumption_key") == akey
+               for q in qlog.open_questions())        # still open, honestly
+
+    # a VERIFIED panel closes it, citing the pursued observation
+    verdict2 = verify_term_understanding(
+        ledger, obs, "trellis-onboard",
+        _panel(ledger, ["VERIFIED\nthe trace supports the reading"] * 4))
+    assert verdict2.status == VerdictStatus.VERIFIED
+    assert resolve_term_if_verified(qlog, "empire", obs, verdict2,
+                                    "trellis-onboard") is True
+    assert not any(q.body.get("assumption_key") == akey
+                   for q in qlog.open_questions())
+
+
+def test_refuted_meaning_is_contested_and_stays_open(ledger, tmp_path, ground):
+    ws = Workspace(tmp_path / "ws", ledger)
+    qlog = QuestionLog(ledger, ground)
+    obs = _observed(ledger, ws, qlog, ground,
+                    proposed={"meaning": "a corporate org chart", "confidence": 0.6})
+    verdict = verify_term_understanding(
+        ledger, obs, "trellis-onboard",
+        _panel(ledger, ["REFUTED\nthe uses contradict this reading"] * 4))
+    assert verdict.status == VerdictStatus.REFUTED
+    # contested + escalated (D35), never deleted; the question stays open
+    contested = contested_items(ledger)
+    assert any(c["subject_id"] == obs.id for c in contested)
+    akey = assumption_key(term_assumption("empire"))
+    assert any(q.body.get("assumption_key") == akey
+               for q in qlog.open_questions())
+    assert resolve_term_if_verified(qlog, "empire", obs, verdict,
+                                    "trellis-onboard") is False
+
+
+def test_human_confirmation_closes_at_high_confidence(ledger, tmp_path, ground):
+    ws = Workspace(tmp_path / "ws", ledger)
+    qlog = QuestionLog(ledger, ground)
+    _observed(ledger, ws, qlog, ground)
+    obs = confirm_term_meaning(ledger, ws, qlog, "empire", "alex",
+                               "the whole tended system of people + agents",
+                               ground)
+    assert obs.body["confidence"] == 0.95
+    assert obs.body["human_confirmed_by"] == "alex"
+    akey = assumption_key(term_assumption("empire"))
+    assert not any(q.body.get("assumption_key") == akey
+                   for q in qlog.open_questions())
+
+
+def test_propose_meaning_parses_defensively(ledger, ground, tmp_path):
+    _seed_messages(ledger, EMPIRE_TEXTS)
+    lin = term_lineage(ledger, "empire")
+    good = MockProvider()
+    good.enqueue_text(json.dumps({"meaning": "the tended whole",
+                                  "confidence": 1.7, "unsure": "casing"}))
+    d = propose_meaning(good, "empire", lin, ledger)
+    assert d["meaning"] == "the tended whole"
+    assert d["confidence"] == 1.0                    # clamped, not trusted raw
+
+    bad = MockProvider()
+    bad.enqueue_text("I think it means something!")   # no JSON
+    assert propose_meaning(bad, "empire", lin, ledger) is None
+    # the excerpts ride inside the data fence (evidence, not instructions)
+    assert "«data" in good.calls[0]["messages"][0]["content"]
+
+
+# --------------------------------------------------------------------------- #
+# 5. the full pass — coordinated, idempotent, honest                           #
+# --------------------------------------------------------------------------- #
+
+def test_full_learning_pass_maps_verifies_and_surfaces_unknowns(
+        ledger, tmp_path, ground):
+    _grant(ledger)
+    _seed_messages(ledger, EMPIRE_TEXTS)
+    maker = MockProvider(id="mock:sonnet")
+    maker.enqueue_text(json.dumps({"meaning": "the tended whole of the work",
+                                   "confidence": 0.8, "unsure": "the lowercase e"}))
+    panel = _panel(ledger, ["VERIFIED\nsupported"] * 4)
+    ritual = _ritual(ledger, tmp_path, ground, provider=maker, verifier=panel,
+                     seed_terms=("empire", "overnight soak"))
+
+    summary = ritual.learning_pass(max_terms=2)
+    assert summary["status"] == "ran"
+    assert "empire" in summary["terms_minted"]
+    assert "empire" in summary["terms_resolved"]      # traced + verified
+    # the unseen phrase got an honest dry seek and STAYS open
+    soak = next(p for p in summary["terms_pursued"]
+                if p["term"] == "overnight soak")
+    assert "dry seek" in soak["outcome"]
+    assert summary["open_unknowns"] >= 1
+
+    # the map exists, with the unknowns note as a first-class output
+    unknowns = ritual.workspace.read("map/unknowns.md")
+    assert "overnight soak" in unknowns
+    people = ritual.workspace.read("map/people.md")
+    assert "brett" in people.lower()
+    # the pass is on the record with a typed ok outcome
+    passes = [e for e in ledger.entries() if e.kind == PASS_KIND]
+    assert passes and passes[-1].body["status"] == "ran"
+    ends = [e for e in ledger.entries() if e.kind == "loop_run_end"]
+    assert ends[-1].body["outcome"] == "ok"
+
+
+def test_repeat_pass_folds_no_duplicates(ledger, tmp_path, ground):
+    _grant(ledger)
+    _seed_messages(ledger, EMPIRE_TEXTS)
+    ritual = _ritual(ledger, tmp_path, ground, seed_terms=("empire",))
+    ritual.learning_pass(max_terms=1)
+    open_before = len(ritual.qlog.open_questions())
+    obs_before = len(ledger.active(TERM_OBSERVATION_KIND))
+
+    ritual.learning_pass(max_terms=1)                 # the daily re-run
+    assert len(ritual.qlog.open_questions()) == open_before
+    assert len(ledger.active(TERM_OBSERVATION_KIND)) == obs_before   # folded
+
+
+def test_pass_without_verifier_leaves_meaning_unresolved(ledger, tmp_path, ground):
+    _grant(ledger)
+    _seed_messages(ledger, EMPIRE_TEXTS)
+    ritual = _ritual(ledger, tmp_path, ground, seed_terms=("empire",))
+    summary = ritual.learning_pass(max_terms=1)
+    assert summary["terms_resolved"] == []            # no self-certification
+    pursued = summary["terms_pursued"][0]
+    assert "open" in pursued["outcome"]
+
+
+def test_broken_source_is_reported_not_fatal(ledger, tmp_path, ground):
+    _grant(ledger)
+
+    class BrokenAdapter:
+        def discover(self):
+            raise RuntimeError("awaiting the human's grant")
+
+    ritual = _ritual(ledger, tmp_path, ground, seed_terms=())
+    summary = ritual.learning_pass(sources=[BrokenAdapter()])
+    assert summary["status"] == "ran"                 # the pass survived
+    assert summary["awaiting"] and "grant" in summary["awaiting"][0]["why"]
+
+
+def test_onboarding_handler_runs_under_the_runner(ledger, tmp_path, ground):
+    from datetime import timedelta as td
+    from trellis.runner import Runner
+    _grant(ledger)
+    _seed_messages(ledger, EMPIRE_TEXTS)
+    ritual = _ritual(ledger, tmp_path, ground, seed_terms=("empire",))
+    handler = onboarding_handler(ritual, max_terms=1)
+    runner = Runner(ledger, ground)
+    specs = Runner.DEFAULT_SCHEDULES + (
+        (ONBOARD_SCHEDULE, td(minutes=30), "the onboarding learning ritual"),)
+
+    report = runner.tick(handlers={ONBOARD_SCHEDULE: handler}, specs=specs)
+    fired = dict(report["fired"])
+    assert fired.get(ONBOARD_SCHEDULE) == "ok"
+    assert any(e.kind == PASS_KIND for e in ledger.entries())

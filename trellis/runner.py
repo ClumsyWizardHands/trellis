@@ -121,19 +121,39 @@ class DayBudget:
             event_time=now, tags=("budget", "charge"))
 
 
+def _subscription_seat() -> bool:
+    """True when the configured maker seat bills a SUBSCRIPTION, not per token:
+    `codex` (ChatGPT login) always; `claude` when it runs on the Max login
+    rather than an API key (ANTHROPIC_API_KEY takes precedence when set)."""
+    kind = os.environ.get("TRELLIS_PROVIDER", "").strip().lower()
+    if kind == "codex":
+        return True
+    return kind == "claude" and not os.environ.get("ANTHROPIC_API_KEY", "").strip()
+
+
 def budget_from_env(ledger: Ledger, ground: Optional[TimeGround] = None
                     ) -> Optional[DayBudget]:
-    """A DayBudget from TRELLIS_DAILY_BUDGET (in `unit`), or a conservative default
-    so an unconfigured always-on process is never UNBOUNDED — the "$300 in two days"
-    is what happens when a personal agent runs with no cap. Set the var to raise or
-    lower it; there is deliberately no way to disable the cap from the runner."""
+    """A DayBudget from TRELLIS_DAILY_BUDGET (in `unit`).
+
+    D39 (Alex, 2026-07-22): a SUBSCRIPTION seat (codex, or claude on the Max
+    login) bills nothing per call, so a dollar cap over it is a fiction — those
+    seats run with NO daily budget by default. A per-token seat (an API key)
+    keeps the conservative default cap, because "$300 in two days" is what
+    happens when a metered personal agent runs unbounded. Explicit settings
+    win either way: a number sets the cap for any seat; `off` disables it."""
     raw = os.environ.get("TRELLIS_DAILY_BUDGET", "").strip()
-    cap = 5.0
+    if raw.lower() in ("off", "none", "unlimited"):
+        return None
+    cap: Optional[float] = None
     if raw:
         try:
             cap = float(raw)
         except ValueError:
-            pass
+            cap = None
+    if cap is None:
+        if _subscription_seat():
+            return None                       # D39: no invented dollar ceiling
+        cap = 5.0
     unit = os.environ.get("TRELLIS_BUDGET_UNIT", "usd").strip() or "usd"
     return DayBudget(ledger, cap=cap, ground=ground, unit=unit)
 
