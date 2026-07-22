@@ -220,10 +220,13 @@ class DiscordBackfill:
 
     # ----- the run -----------------------------------------------------------
 
-    def run(self, now: Optional[datetime] = None) -> BackfillReport:
+    def run(self, now: Optional[datetime] = None,
+            focus_channels=None) -> BackfillReport:
         """One bounded backfill pass over every not-yet-caught-up surface.
         Records per-surface state + an overall summary on the ledger. A re-run
-        after catch-up is a cheap no-op (state fold, no fetches)."""
+        after catch-up is a cheap no-op (state fold, no fetches).
+        `focus_channels` is accepted for interface parity with RecencyBackfill
+        (D52) and ignored — the forward walk has no notion of targeting."""
         report = BackfillReport()
         done = self.caught_up_surfaces()
         cursors = self._cursors()
@@ -304,4 +307,161 @@ class DiscordBackfill:
                 # record it and stop rather than spin (no silent busy-loop).
                 sr.error = "cursor did not advance on a non-empty page"
                 return budget
+        return budget
+
+
+# ---------------------------------------------------------------------------
+# D52 — recency-first acquisition: descend into history, newest first
+# ---------------------------------------------------------------------------
+
+#: per-surface DESCENT state (D52): where the backward walk has reached.
+DESCENT_CURSOR_KIND = "discord_descent_cursor"
+
+
+class RecencyBackfill(DiscordBackfill):
+    """D52 (Alex, 2026-07-22): start at TODAY and descend into history in
+    day-sized slices, instead of inhaling the whole past before understanding
+    anything. The shape:
+
+      * FIRST bite per surface: the newest page. It seeds the live poll's
+        cursor (the tick poll owns the present from that moment) and anchors
+        the backward walk.
+      * EACH pass after: descend `before=<oldest seen>` until roughly
+        `slice_days` of history has been bitten off for that surface (or the
+        run budget is spent). Comprehension keeps pace with acquisition — the
+        map is useful within minutes, and the deep past arrives gradually.
+      * CURIOSITY-TARGETED deepening: surfaces named in `focus_channels`
+        (where open questions' terms actually live) are descended FIRST and
+        get a double-depth slice — the crawl goes down the threads the open
+        questions point at, not uniformly.
+      * BOTTOM is a recorded fact: an empty page ends a surface's descent
+        (`bottom: true` on its descent cursor); re-runs never re-fetch.
+
+    Same spine, same isolation, same idempotency as the forward walk — only
+    the direction and pacing differ. Arrival order never matters downstream:
+    every reader sorts by event_time."""
+
+    def __init__(self, *args, slice_days: float = 1.0, **kw):
+        super().__init__(*args, **kw)
+        self.slice_days = max(0.1, float(slice_days))
+
+    # ----- descent state (ledger folds) -------------------------------------
+
+    def _descent_state(self) -> dict:
+        """channel -> latest {'before', 'oldest_time', 'bottom'} from the ledger."""
+        st: dict = {}
+        for e in self.ledger.entries():
+            if e.kind == DESCENT_CURSOR_KIND and e.body.get("channel"):
+                st[e.body["channel"]] = e.body
+        return st
+
+    def _persist_descent(self, cid: str, before: Optional[str],
+                         oldest_time: Optional[str], bottom: bool,
+                         now: Optional[datetime]) -> None:
+        self.ledger.append(
+            kind=DESCENT_CURSOR_KIND, author=self.author,
+            body={"channel": cid, "before": before,
+                  "oldest_time": oldest_time, "bottom": bottom},
+            event_time=now, tags=("discord", "descent", cid))
+
+    # ----- the run ----------------------------------------------------------
+
+    def run(self, now: Optional[datetime] = None,
+            focus_channels=None) -> BackfillReport:
+        report = BackfillReport()
+        state = self._descent_state()
+        cursors = self._cursors()
+        bot_id = self._bot_id()
+        budget = self.max_messages_per_run
+        focus = {str(c) for c in (focus_channels or ())}
+
+        def _is_focus(s: PollSurface) -> bool:
+            return s.channel_id in focus or (s.channel_name and s.channel_name in focus)
+
+        ordered = sorted(self.surfaces, key=lambda s: (not _is_focus(s), s.channel_id))
+        for surf in ordered:
+            if not self._readable(surf):
+                continue
+            cid = surf.channel_id
+            sr = SurfaceBackfillReport(channel_id=cid)
+            st = state.get(cid, {})
+            if st.get("bottom"):
+                sr.caught_up = True
+                report.surfaces.append(sr)
+                continue
+            if budget <= 0:
+                report.budget_exhausted = True
+                report.surfaces.append(sr)
+                continue
+            depth = self.slice_days * (2.0 if _is_focus(surf) else 1.0)
+            budget = self._descend_surface(surf, st, cursors, budget, bot_id,
+                                           sr, now, depth)
+            report.surfaces.append(sr)
+
+        self.ledger.append(
+            kind=BACKFILL_STATE_KIND, author=self.author,
+            body={"summary": True, "mode": "recency", **report.to_body()},
+            event_time=now, tags=("discord", "backfill", "recency", "summary"))
+        return report
+
+    def _descend_surface(self, surf: PollSurface, st: dict, cursors: dict,
+                         budget: int, bot_id: str, sr: SurfaceBackfillReport,
+                         now: Optional[datetime], depth_days: float) -> int:
+        from datetime import timedelta
+        cid = surf.channel_id
+        before = st.get("before")
+        anchor = None                       # newest event_time in THIS pass's bite
+        slice_span = timedelta(days=depth_days)
+        while budget > 0:
+            try:
+                if before is None:
+                    # the first bite: the newest page (no cursor at all)
+                    batch = self.client.fetch_messages(
+                        cid, limit=min(self.page_limit, budget),
+                        channel_name=surf.channel_name, is_thread=surf.is_thread,
+                        parent_channel=surf.parent_channel, is_dm=surf.is_dm)
+                else:
+                    batch = self.client.fetch_messages(
+                        cid, limit=min(self.page_limit, budget), before=before,
+                        channel_name=surf.channel_name, is_thread=surf.is_thread,
+                        parent_channel=surf.parent_channel, is_dm=surf.is_dm)
+            except DiscordRateLimited as e:
+                sr.error = str(e)
+                sr.retry_after = e.retry_after
+                return budget
+            except DiscordAPIError as e:
+                sr.error = str(e)
+                return budget
+            sr.pages += 1
+            if not batch.messages:
+                sr.caught_up = True         # the beginning of history — recorded
+                self._persist_descent(cid, before, st.get("oldest_time"),
+                                      bottom=True, now=now)
+                return budget
+            msgs = [m for m in batch.messages
+                    if not (bot_id and m.author_id == bot_id)]
+            res = ingest_scoped_discord_idempotent(
+                self.ledger, msgs, self.iso, self.registry)
+            sr.fetched += len(batch.messages)
+            sr.admitted += res.admitted
+            sr.dropped += res.dropped
+            budget -= len(batch.messages)
+            oldest = batch.messages[0]
+            newest = batch.messages[-1]
+            if before is None:
+                # seed the LIVE cursor once, so the tick poll owns the present
+                # from here on; never clobber a cursor the poll already holds.
+                if not cursors.get(cid):
+                    self.ledger.append(
+                        kind=POLL_CURSOR_KIND, author=self.author,
+                        body={"channel": cid, "cursor": newest.message_id},
+                        event_time=now, tags=("discord", "cursor", cid))
+                anchor = newest.posted_at
+            elif anchor is None:
+                anchor = newest.posted_at
+            before = oldest.message_id
+            self._persist_descent(cid, before, oldest.posted_at.isoformat(),
+                                  bottom=False, now=now)
+            if anchor is not None and (anchor - oldest.posted_at) >= slice_span:
+                return budget               # this pass's day-sized bite is done
         return budget

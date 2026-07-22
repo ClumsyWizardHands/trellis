@@ -195,7 +195,8 @@ class DiscordClient:
     # ----- reads -------------------------------------------------------------
 
     def fetch_messages(self, channel_id: str, after: Optional[str] = None,
-                       limit: int = 50, *, channel_name: str = "",
+                       limit: int = 50, *, before: Optional[str] = None,
+                       channel_name: str = "",
                        is_thread: bool = False, parent_channel: Optional[str] = None,
                        is_dm: bool = False) -> MessageBatch:
         """GET /channels/{id}/messages, mapping each to a `DiscordMessage`.
@@ -214,7 +215,7 @@ class DiscordClient:
           * neither           → a plain channel message.
         """
         raw = self._request("GET", f"/channels/{channel_id}/messages",
-                            query=self._message_query(after, limit))
+                            query=self._message_query(after, limit, before))
         rows = raw if isinstance(raw, list) else []
         thread_id = channel_id if is_thread else None
         channel = (parent_channel or channel_id) if is_thread else channel_id
@@ -228,10 +229,15 @@ class DiscordClient:
         return MessageBatch(messages=messages, cursor=cursor)
 
     @staticmethod
-    def _message_query(after: Optional[str], limit: int) -> dict:
+    def _message_query(after: Optional[str], limit: int,
+                       before: Optional[str] = None) -> dict:
+        """`after` walks history forward; `before` walks it BACKWARD (the D52
+        recency-first descent). Never both — the caller picks a direction."""
         q: dict = {"limit": max(1, min(int(limit), 100))}
         if after:
             q["after"] = after
+        elif before:
+            q["before"] = before
         return q
 
     @staticmethod

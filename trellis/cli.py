@@ -836,11 +836,27 @@ def _build_onboarding(ledger, iso, registry, seed_terms):
         iso, surfaces, scope_note = _discord_read_scope(iso, client, ledger)
         if scope_note:
             notes.append(scope_note)
-        from .backfill import DiscordBackfill
-        backfill = DiscordBackfill(client, iso, registry, ledger,
-                                   surfaces=surfaces)
-        notes.append(f"Discord backfill: {len(iso.allow.read)} read surface(s), "
-                     "oldest→newest, resumable")
+        # D52: recency-first descent is the default — start at today, bite off
+        # day-sized slices of the past, deepen where open questions point.
+        mode = os.environ.get("TRELLIS_BACKFILL", "recency").strip().lower()
+        raw_days = os.environ.get("TRELLIS_BACKFILL_DAYS", "").strip()
+        try:
+            slice_days = float(raw_days) if raw_days else 1.0
+        except ValueError:
+            slice_days = 1.0
+        if mode == "full":
+            from .backfill import DiscordBackfill
+            backfill = DiscordBackfill(client, iso, registry, ledger,
+                                       surfaces=surfaces)
+            notes.append(f"Discord backfill: {len(iso.allow.read)} surface(s), "
+                         "oldest→newest bulk (TRELLIS_BACKFILL=full)")
+        else:
+            from .backfill import RecencyBackfill
+            backfill = RecencyBackfill(client, iso, registry, ledger,
+                                       surfaces=surfaces, slice_days=slice_days)
+            notes.append(f"Discord backfill: {len(iso.allow.read)} surface(s), "
+                         f"recency-first descent, ~{slice_days:g} day(s)/pass, "
+                         "curiosity-deepened (D52)")
 
     # check-in digests: when an ACT surface is armed, new learnings STAGE a
     # digest there (posts only after the owner's ✅) — the discussion comes to
@@ -853,11 +869,17 @@ def _build_onboarding(ledger, iso, registry, seed_terms):
         notes.append(f"check-in digests stage to {checkin_target} when "
                      "something settles or breaks (still your ✅ to post)")
 
+    raw_dpp = os.environ.get("TRELLIS_DOCS_PER_PASS", "").strip()
+    try:
+        docs_per_pass = int(raw_dpp) if raw_dpp else 150
+    except ValueError:
+        docs_per_pass = 150
     workspace = Workspace(_workspace_root(), ledger)
     ritual = OnboardingRitual(ledger, workspace, provider=provider,
                               verifier=verifier, registry=registry,
                               seed_terms=seed_terms,
-                              outbox=outbox, checkin_target=checkin_target)
+                              outbox=outbox, checkin_target=checkin_target,
+                              docs_per_pass=docs_per_pass)
     return ritual, sources, backfill, client, iso, surfaces, notes
 
 
@@ -868,8 +890,12 @@ def _print_pass_summary(summary: dict) -> None:
         print(f"  backfill: {'caught up' if b.get('all_caught_up') else 'in progress'} "
               f"({len(b.get('surfaces', []))} surface(s))")
     for name, res in (summary.get("ingested") or {}).items():
-        print(f"  {name}: {res['processed']} new, {res['corrected']} corrected, "
-              f"{res['skipped_duplicate']} already known")
+        line = (f"  {name}: {res['processed']} new, {res['corrected']} corrected, "
+                f"{res.get('already_known', res.get('skipped_duplicate', 0))} already known")
+        if res.get("deferred_for_pacing"):
+            line += (f", {res['deferred_for_pacing']} deferred for pacing "
+                     "(newest first, D52)")
+        print(line)
     for a in summary.get("awaiting", []):
         print(f"  ! {a['source']}: {a['why']}")
     minted = [t for t in summary.get("terms_minted", []) if t]

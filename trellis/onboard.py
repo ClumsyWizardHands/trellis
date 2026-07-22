@@ -854,7 +854,8 @@ class OnboardingRitual:
                  author: str = "trellis-onboard",
                  seed_terms: Optional[List[str]] = None,
                  scout: Optional[TermScout] = None,
-                 outbox=None, checkin_target: str = ""):
+                 outbox=None, checkin_target: str = "",
+                 docs_per_pass: int = 150):
         self.ledger = ledger
         self.workspace = workspace
         self.ground = ground or ledger.ground
@@ -870,6 +871,11 @@ class OnboardingRitual:
         # only after their ✅ — stage-don't-fire holds for check-ins too).
         self.outbox = outbox
         self.checkin_target = checkin_target
+        # D52: documents are ingested NEWEST-FIRST, at most this many new ones
+        # per pass — acquisition keeps pace with comprehension instead of
+        # inhaling the archive before understanding anything. Corrections are
+        # never deferred (a wrong record beats a paced one for urgency).
+        self.docs_per_pass = max(1, int(docs_per_pass))
 
     # ----- the pass ----------------------------------------------------------
 
@@ -898,7 +904,8 @@ class OnboardingRitual:
                 return summary
 
             if backfill is not None:
-                summary["backfill"] = backfill.run(now).to_body()
+                summary["backfill"] = backfill.run(
+                    now, focus_channels=self._focus_channels()).to_body()
 
             for adapter in (sources or []):
                 name = type(adapter).__name__
@@ -910,11 +917,13 @@ class OnboardingRitual:
                     name = f"{name}({where})"
                 try:
                     ing = Ingestor(self.ledger, author=self.author)
-                    res = ing.ingest(adapter.discover(),
+                    batch, already, deferred = self._paced_batch(ing, adapter)
+                    res = ing.ingest(batch,
                                      document_harvester(self.ledger, self.author))
                     summary["ingested"][name] = {
                         "processed": res.processed, "corrected": res.corrected,
-                        "skipped_duplicate": res.skipped_duplicate,
+                        "already_known": already,
+                        "deferred_for_pacing": deferred,
                         "skipped_files": list(getattr(adapter, "skipped", []))}
                 except Exception as e:
                     # an ungranted or broken source is REPORTED, per source —
@@ -953,6 +962,45 @@ class OnboardingRitual:
                    f"{summary['open_unknowns']} unknown(s) on the record",
                    evidence=[entry.id])
         return summary
+
+    # ----- D52: pacing + curiosity focus ------------------------------------
+
+    def _paced_batch(self, ing: Ingestor, adapter) -> tuple:
+        """Newest-first, bounded acquisition (D52): classify every discovered
+        item against the ingest markers ONCE (one fold, not one per item), then
+        feed ALL corrections/resumes (a wrong record is urgent) plus at most
+        `docs_per_pass` NEW items, newest event_time first. Returns
+        (batch, already_known_count, deferred_count) — the deferral is
+        REPORTED, never silent (no silent caps)."""
+        items = sorted(adapter.discover(),
+                       key=lambda i: i.event_time, reverse=True)
+        markers = ing._markers()
+        fresh, urgent, already = [], [], 0
+        for it in items:
+            m = markers.get(it.identity_key())
+            if m is None:
+                fresh.append(it)
+            elif (m.get("phase") == "started"
+                  or m.get("content_hash") != it.content_hash()):
+                urgent.append(it)          # a correction/resume — never deferred
+            else:
+                already += 1
+        batch = urgent + fresh[:self.docs_per_pass]
+        deferred = max(0, len(fresh) - self.docs_per_pass)
+        return batch, already, deferred
+
+    def _focus_channels(self) -> set:
+        """Where should the descent deepen? The channels in which OPEN term
+        questions' traced occurrences actually live — curiosity steers the
+        crawl down its own threads (D52), instead of uniform inhalation."""
+        open_akeys = {q.body.get("assumption_key")
+                      for q in self.qlog.open_questions()}
+        focus: set = set()
+        for e in self.ledger.active(TERM_OBSERVATION_KIND):
+            term = e.body.get("term", "")
+            if assumption_key(term_assumption(term)) in open_akeys:
+                focus.update((e.body.get("lineage") or {}).get("channels") or [])
+        return focus
 
     # ----- the check-in: bring the learnings TO the human -------------------
 

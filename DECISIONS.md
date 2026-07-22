@@ -1054,6 +1054,42 @@ via the gateway/poll paths under D32's scoping.
 
 ---
 
+## D52 — Recency-first acquisition: descend into history, curiosity steering ✅ fresh
+
+**Decision:** a new instance does not inhale the whole archive before understanding
+anything. Discord backfill starts at **today** (the newest page seeds the live poll's
+cursor, so the present is owned immediately) and **descends into history in day-sized
+slices** — roughly `TRELLIS_BACKFILL_DAYS` (default 1) per surface per pass — with
+**curiosity-targeted deepening**: surfaces where OPEN questions' terms actually occur
+are descended first, at double depth. Documents ingest **newest-first**, at most
+`TRELLIS_DOCS_PER_PASS` (default 150) new items per pass; corrections are never
+deferred; every deferral is reported, never silent. Reaching the beginning of a
+surface's history is a recorded fact (`bottom` on its descent cursor). The old
+oldest-first bulk walk remains available (`TRELLIS_BACKFILL=full`).
+
+**Triangulation:**
+1. Alex, 2026-07-22: "it should be focusing one day at a time and then figuring out
+   where it needs to learn more… each day increasing the understanding of the most
+   recent history, as opposed to trying to inhale the entirety of Discord."
+2. D22/D14 (curiosity has teeth; memory is navigation — sparse maps, forced
+   traversal): the open questions are exactly the map of where to dig; uniform bulk
+   inhalation is the anti-pattern of forced traversal.
+3. The comprehension-debt surface (2026-07-22 pacing work) made the failure visible:
+   bulk acquisition drives the walked-vs-ingested ratio to near zero for hours —
+   "ingested is not understood," structurally guaranteed by the old order.
+4. Safe by construction: arrival order never matters downstream — the spine is
+   idempotent and every reader sorts by event_time — so the direction change touches
+   pacing, not correctness.
+
+**Consequence:** `DiscordClient.fetch_messages(before=…)`, `backfill.RecencyBackfill`
+(descent cursors as `discord_descent_cursor` events, bottom recorded, focus-first
+ordering), `OnboardingRitual._paced_batch` (newest-first bounded docs) +
+`_focus_channels` (open questions steer the crawl), CLI defaults to recency mode.
+The already-swallowed first instance is unaffected; every future instance — including
+the EoC deployment — starts useful within minutes.
+
+---
+
 ## ⏳ Watch list (decisions deliberately NOT taken)
 
 - **W1 — No skill marketplace / no auto-installed skills.** [OPENCLAW] supply-chain
