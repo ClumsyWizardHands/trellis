@@ -902,6 +902,30 @@ def cmd_begin(args: argparse.Namespace) -> int:
     return 0
 
 
+# ---------- confirm (the human's word on what a term means) ----------
+
+
+def cmd_confirm(args: argparse.Namespace) -> int:
+    """The human side of the discussion loop, one command:
+    `trellis confirm "empire" "the whole tended system of people and agents"`.
+    Records a human-confirmed observation (0.95), closes the term's open
+    curiosity, and refreshes the map note."""
+    config.load_dotenv()
+    from .ledger import Ledger
+    from .memory import Workspace
+    from .curiosity import QuestionLog
+    from .onboard import confirm_term_meaning
+    ledger = Ledger(config.ledger_path())
+    ws = Workspace(_workspace_root(), ledger)
+    human = os.environ.get("TRELLIS_HUMAN", "operator").strip() or "operator"
+    obs = confirm_term_meaning(ledger, ws, QuestionLog(ledger),
+                               args.term, human, args.meaning, ledger.ground)
+    print(f"✓ recorded: '{args.term}' means, per {human}: {args.meaning}")
+    print(f"  confidence {obs.body['confidence']} · observation {obs.id} · "
+          "the curiosity is closed; the map note is refreshed")
+    return 0
+
+
 # ---------- google (the human's one-time browser grant) ----------
 
 
@@ -973,12 +997,16 @@ def main(argv=None) -> int:
     g = sub.add_parser("google", help="the human's one-time Google grant "
                                       "(browser OAuth; trellis never sees the secret)")
     g.add_argument("action", choices=["grant", "status"])
+    c = sub.add_parser("confirm", help="tell trellis what a term means "
+                                       "(closes its curiosity at human confidence)")
+    c.add_argument("term", help="the term, e.g. \"empire\"")
+    c.add_argument("meaning", help="what it means here, in your words")
 
     args = ap.parse_args(argv)
     return {"init": cmd_init, "doctor": cmd_doctor, "demo": cmd_demo,
             "tick": cmd_tick, "run": cmd_run, "web": cmd_web,
             "discord": cmd_discord, "begin": cmd_begin, "onboard": cmd_begin,
-            "google": cmd_google}[args.cmd](args)
+            "google": cmd_google, "confirm": cmd_confirm}[args.cmd](args)
 
 
 if __name__ == "__main__":  # pragma: no cover

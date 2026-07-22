@@ -122,6 +122,23 @@ def test_multiple_source_folders_are_each_wired_and_honestly_kinded(
     assert kinds["2026-07-01 sync"] == "transcript"
 
 
+def test_confirm_command_closes_the_curiosity(monkeypatch, tmp_path, capsys):
+    _env(monkeypatch, tmp_path)
+    monkeypatch.setenv("TRELLIS_ONBOARD_TERMS", "empire")
+    main(["begin", "--once", "--answer", "yes"])
+    capsys.readouterr()
+    rc = main(["confirm", "empire",
+               "the whole tended system of people and agents"])
+    assert rc == 0
+    out = capsys.readouterr().out
+    assert "confidence 0.95" in out
+    from trellis.curiosity import QuestionLog
+    ledger = Ledger(tmp_path / "state" / "ledger.jsonl")
+    open_terms = [q for q in QuestionLog(ledger).open_questions()
+                  if "empire" in q.body.get("assumption", "")]
+    assert open_terms == []                          # the human's word closed it
+
+
 def test_doctor_reports_google_awaiting_grant(monkeypatch, tmp_path, capsys):
     _env(monkeypatch, tmp_path)
     monkeypatch.setenv("TRELLIS_DRIVE_FOLDER", "folder-123")
