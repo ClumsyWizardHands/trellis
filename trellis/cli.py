@@ -1005,7 +1005,13 @@ def cmd_begin(args: argparse.Namespace) -> int:
     for n in notes:
         print(f"  · {n}")
 
-    handler = onboarding_handler(ritual, sources=sources, backfill=backfill)
+    raw_tpp = os.environ.get("TRELLIS_TERMS_PER_PASS", "").strip()
+    try:
+        terms_per_pass = int(raw_tpp) if raw_tpp else 6
+    except ValueError:
+        terms_per_pass = 6
+    handler = onboarding_handler(ritual, sources=sources, backfill=backfill,
+                                 max_terms=terms_per_pass)
     summary = handler()                          # the first pass, right now
     _print_pass_summary(summary)
 

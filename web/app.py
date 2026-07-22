@@ -769,7 +769,29 @@ def _curiosities_body(led: Ledger) -> str:
     from trellis.onboard import TERM_OBSERVATION_KIND, term_from_assumption
     obs_by_key = {e.body.get("term_key"): e
                   for e in led.active(TERM_OBSERVATION_KIND)}
+    # SPLIT (Alex, 2026-07-22): questions that genuinely need the human's
+    # Y/N/T float to the TOP; everything else is the agent's OWN research
+    # agenda — listed, never presented as the human's homework.
+    needs_you, researching = [], []
     for q in c["open"]:
+        term = term_from_assumption(q.get("assumption") or "")
+        obs = obs_by_key.get("term:" + question_key(term)) if term else None
+        if term and obs is not None and (obs.body.get("meaning") or "").strip():
+            needs_you.append(q)
+        else:
+            researching.append(q)
+    if needs_you:
+        out.append(f'<h3 style="margin-top:14px">Needs your Y/N/T '
+                   f'<span class="muted small">({len(needs_you)} reading(s) '
+                   'I have brought you)</span></h3>')
+    for q in needs_you + [None] + researching:
+        if q is None:
+            out.append(
+                f'<h3 style="margin-top:18px">On my mind '
+                f'<span class="muted small">({len(researching)} question(s) '
+                'I am researching on my own — I will bring you a reading; '
+                'nothing here needs you)</span></h3>')
+            continue
         badge = '<span class="pill hn">overdue</span> ' if q["stale"] else ""
         dry = (f' · <span class="warn small">dry streak {q["dry_streak"]}</span>'
                if q["dry_streak"] else "")
@@ -814,30 +836,26 @@ def _curiosities_body(led: Ledger) -> str:
                     'your own wording on Y; recorded but withheld on N)" '
                     'style="flex:1;min-width:240px"></form></div>')
                 continue
-            elif obs is not None:
-                lin = b.get("lineage") or {}
-                out.append(f'<div class="muted small" style="margin-top:4px">'
-                           f'traced ({lin.get("occurrences", "?")} use(s)) — '
-                           'no proposed reading yet; the model seat takes it '
-                           'on an upcoming pass</div>')
-                placeholder = f"or just tell me what '{term}' means here"
-                button = "✓ Confirm meaning"
-                prefill = ""
             else:
-                out.append('<div class="muted small" style="margin-top:4px">'
-                           'queued — I pursue a few terms per pass and will '
-                           'bring you a proposed reading; you never have to '
-                           'answer these cold</div>')
-                placeholder = f"or skip my queue: what does '{term}' mean here?"
-                button = "✓ Confirm meaning"
-                prefill = ""
-            out.append(
-                '<form method="post" action="/confirm-term" '
-                'style="margin-top:8px;display:flex;gap:8px;align-items:center">'
-                f'<input type="hidden" name="term" value="{esc(term)}">'
-                f'<input name="meaning" required{prefill} '
-                f'placeholder="{esc(placeholder)}" style="flex:1;min-width:260px">'
-                f'<button class="good">{button}</button></form>')
+                # the agent's OWN research agenda — status only, no input box
+                # soliciting the human (the form hides behind a details toggle
+                # for the rare case the human simply knows and wants to say).
+                lin = (b.get("lineage") or {}) if obs is not None else {}
+                status = (f'traced ({lin.get("occurrences", "?")} use(s)) — '
+                          'reading in progress'
+                          if obs is not None else
+                          'researching — I will trace it and bring you a reading')
+                out.append(f'<div class="muted small" style="margin-top:4px">'
+                           f'{status}</div>')
+                out.append(
+                    '<details class="small" style="margin-top:6px">'
+                    '<summary class="muted">I already know this one — tell it</summary>'
+                    '<form method="post" action="/confirm-term" '
+                    'style="margin-top:6px;display:flex;gap:8px;align-items:center">'
+                    f'<input type="hidden" name="term" value="{esc(term)}">'
+                    f'<input name="meaning" required placeholder="what '
+                    f'\'{esc(term)}\' means here" style="flex:1;min-width:240px">'
+                    '<button class="good">✓ Confirm</button></form></details>')
         out.append('</div>')
     if not c["open"]:
         out.append('<div class="panel"><div class="muted small">No open questions — either '

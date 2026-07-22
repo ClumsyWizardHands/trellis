@@ -417,8 +417,8 @@ _MEANING_SYSTEM = (
 
 
 def propose_meaning(provider, term: str, lineage: TermLineage,
-                    ledger: Ledger, max_excerpts: int = 8,
-                    steer: str = "") -> Optional[dict]:
+                    ledger: Ledger, max_excerpts: int = 14,
+                    steer: str = "", prior: Optional[dict] = None) -> Optional[dict]:
     """Ask the configured seat what the traced uses suggest the term means.
     The excerpts ride inside a data fence (retrieved content is evidence, not
     instructions). A malformed reply returns None — recorded upstream, never
@@ -426,10 +426,29 @@ def propose_meaning(provider, term: str, lineage: TermLineage,
     if provider is None or not lineage.entry_ids:
         return None
     # recency-weighted reading: a couple of the EARLIEST uses (how the meaning
-    # began) + the MOST RECENT (what it means NOW) — chronological order kept.
+    # began) + recent uses — and on REPEAT visits the window ROTATES through
+    # the evidence, so each pass reads slices the last one did not (iterative
+    # deepening: 'the agent should research over time', Alex 2026-07-22).
     ids = list(lineage.entry_ids)
+    visit = int((prior or {}).get("visits") or 0)
     if len(ids) > max_excerpts:
-        ids = ids[:2] + ids[-(max_excerpts - 2):]
+        anchor, rest = ids[:2], ids[2:]
+        take = max_excerpts - 2
+        newest_first = rest[::-1]
+        if visit and newest_first:
+            rot = (visit * take) % len(newest_first)
+            newest_first = newest_first[rot:] + newest_first[:rot]
+        sel = newest_first[:take]
+        order = {i: n for n, i in enumerate(rest)}
+        sel.sort(key=lambda i: order[i])   # chronological display preserved
+        ids = anchor + sel
+    if prior and prior.get("meaning"):
+        steer = (steer or "") + (
+            f"\n\nYour previous reading (visit {visit}): {prior['meaning']}\n"
+            f"You were unsure about: {prior.get('unsure') or '—'}\n"
+            "DEEPEN this reading — do not restart it. Add the layers these "
+            "excerpts support, resolve what you were unsure about if they "
+            "allow it, and name plainly what remains unknown.")
     excerpts = []
     for eid in ids:
         e = ledger.get(eid)
@@ -497,7 +516,8 @@ def record_term_observation(ledger: Ledger, workspace: Workspace,
                             human_confirmed_by: Optional[str] = None,
                             human_meaning: Optional[str] = None,
                             cap: float = MODEL_MEANING_CONFIDENCE_CAP,
-                            basis_note: str = "") -> Entry:
+                            basis_note: str = "",
+                            human_note: str = "") -> Entry:
     """Put the traced understanding ON THE RECORD: one `term_observation` entry
     (folding onto the prior one for the same term — supersession, not a fork),
     a map note beside it, and a NON-DRY seek tying the map-move to the term's
@@ -531,9 +551,12 @@ def record_term_observation(ledger: Ledger, workspace: Workspace,
     entry = ledger.append(
         kind=TERM_OBSERVATION_KIND, author=author,
         body={"term": lineage.term, "term_key": tkey,
+              "visits": (int(prior.body.get("visits", 0)) + 1
+                         if prior is not None else 1),
               "lineage": lineage.to_body(), "meaning": meaning,
               "meaning_basis": basis,
               "unsure": (proposed or {}).get("unsure", ""),
+              "human_note": human_note or None,
               "evidence_window": f"cited {len(lineage.entry_ids)} of "
                                  f"{lineage.occurrences} use(s) — the earliest "
                                  "plus the most recent (recency-weighted)",
@@ -626,7 +649,14 @@ def verify_term_understanding(ledger: Ledger, obs: Entry, maker: str,
                            expect_contains=term),
                   Evidence(EvidenceKind.OUTPUT, ref=trace_text,
                            note="the traced lineage (earliest + most recent "
-                                "uses) — judge the reading against THESE")])
+                                "uses) — judge the reading against THESE")]
+                 + ([Evidence(EvidenceKind.OUTPUT,
+                              ref=f"OWNER'S TRIANGULATION NOTE (trusted "
+                                  f"testimony, legitimate evidence): "
+                                  f"{obs.body['human_note']}",
+                              note="the owner's own clarification — a reading "
+                                   "resting on this is resting on evidence")]
+                    if obs.body.get("human_note") else []))
     return convene_verification(ledger, claim, verifier,
                                 subject_id=obs.id,
                                 subject_kind=TERM_OBSERVATION_KIND)
@@ -1683,18 +1713,27 @@ class OnboardingRitual:
                     cap = 0.8
                     basis_note = ("re-proposed WITH the human's triangulation "
                                   "note folded in")
+            prior_obs = latest_term_observation(self.ledger, term)
+            prior = None
+            if prior_obs is not None and prior_obs.body.get("meaning"):
+                prior = {"meaning": prior_obs.body["meaning"],
+                         "unsure": prior_obs.body.get("unsure", ""),
+                         "visits": prior_obs.body.get("visits", 1)}
             proposed = None
             if self.provider is not None:
                 try:
                     proposed = propose_meaning(self.provider, term, lineage,
-                                               self.ledger, steer=steer)
+                                               self.ledger, steer=steer,
+                                               prior=prior)
                 except Exception as e:
                     pursued.append({"term": term,
                                     "outcome": f"model seat failed: {e}"})
             obs = record_term_observation(
                 self.ledger, self.workspace, self.qlog, term, lineage,
                 author=self.author, ground=self.ground, proposed=proposed,
-                cap=cap, basis_note=basis_note)
+                cap=cap, basis_note=basis_note,
+                human_note=(review.body.get("note", "") if review is not None
+                            and review.body.get("verdict") == "T" else ""))
             verdict = None
             try:
                 verdict = verify_term_understanding(self.ledger, obs,
