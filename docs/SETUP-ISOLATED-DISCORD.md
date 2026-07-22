@@ -1,5 +1,12 @@
 # Setup — trellis's own isolated Discord identity
 
+> **SUPERSEDED 2026-07-22** by the go-live layer (D31–D38) and
+> `GO-LIVE-CHECKLIST.md`. The status header below predates that work: the send
+> executor now exists (durable outbox, stage-don't-fire, ✅-reaction approval)
+> and the live path is the tick-based poll, not the gateway. Part A (creating
+> the bot, ids) remains accurate and is referenced by the checklist §6 and
+> `SPEC-EOC-DEPLOY-2026-07-22.md` §5.
+
 > **Status: NOT DONE.** The isolation *boundary* is built and tested
 > (`trellis/isolation.py`, D30). The live wiring below is pending the steps only
 > Alex can do (creating a bot, handing over ids). The **send executor is
