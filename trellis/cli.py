@@ -119,10 +119,17 @@ def cmd_doctor(args: argparse.Namespace) -> int:
     if not os.environ.get("TRELLIS_DISCORD_TOKEN", "").strip():
         r.line("SKIP", "Discord", "TRELLIS_DISCORD_TOKEN unset (inert)")
     else:
-        reads = [s for s in os.environ.get("TRELLIS_READ_SURFACES", "").split(",") if s.strip()]
+        reads = [s for s in os.environ.get("TRELLIS_READ_SURFACES", "").split(",")
+                 if s.strip() and s.strip().lower() != "auto"]
         acts = [s for s in os.environ.get("TRELLIS_ACT_SURFACES", "").split(",") if s.strip()]
-        if not reads:
-            r.line("WARN", "Discord", "token set but TRELLIS_READ_SURFACES empty (reads nothing)")
+        guild = os.environ.get("TRELLIS_DISCORD_GUILD", "").strip()
+        if not reads and guild:
+            r.line("OK", "Discord read",
+                   f"D40 auto scope — reads what the bot can see in guild {guild} "
+                   "(derived + probed at startup; token not validated here)")
+        elif not reads:
+            r.line("WARN", "Discord", "token set but no TRELLIS_DISCORD_GUILD or "
+                                      "TRELLIS_READ_SURFACES (reads nothing)")
         else:
             # No credential or reachability check has run here, so we do NOT
             # claim OK — an unchecked token is UNVERIFIED, not verified (Codex#14).

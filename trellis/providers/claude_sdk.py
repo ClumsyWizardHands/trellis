@@ -33,9 +33,23 @@ def _subscription_login_present() -> bool:
     home = Path.home()
     if (home / ".claude" / ".credentials.json").exists():
         return True
-    # macOS keeps the token in the Keychain (no readable file); the presence of a
-    # real Claude Code config dir is a weak positive we surface rather than a hard
-    # yes — the honest path for unattended use is CLAUDE_CODE_OAUTH_TOKEN.
+    # macOS keeps the credential in the Keychain (no readable file). Check for
+    # the ENTRY'S EXISTENCE only — `security find-generic-password` WITHOUT -w
+    # never prints the secret; exit 0 just means "an entry is there". This is
+    # still not network-verified (preflight says so), but it stops a real,
+    # working `claude login` from reading as "no credential" on macOS.
+    import subprocess
+    import sys
+    if sys.platform == "darwin":
+        try:
+            res = subprocess.run(
+                ["security", "find-generic-password", "-s",
+                 "Claude Code-credentials"],
+                capture_output=True, timeout=5)
+            if res.returncode == 0:
+                return True
+        except Exception:
+            pass
     return False
 
 
