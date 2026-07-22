@@ -1,6 +1,6 @@
 # STRESS REPORT
 
-run: 2026-07-22T16:29:48+00:00 · python 3.11.13 · seed 20260715 (deterministic chaos)
+run: 2026-07-22T16:44:44+00:00 · python 3.11.13 · seed 20260715 (deterministic chaos)
 result: **10/10 attacks defeated**
 
 The suite's stance is the verifier's stance: each scenario ATTACKS one of
@@ -8,7 +8,7 @@ the harness's refusals. A pass means the attack failed. Evidence below is
 recorded, not narrated.
 
 ## ✅ scale: 5k ledger entries — append, supersede, search, as_of
-took 0.425s
+took 0.432s
 ```json
 {
   "entries": 5000,
@@ -22,7 +22,7 @@ took 0.425s
 ```
 
 ## ✅ session death: 200 chaotic runs — zero silent failures possible
-took 0.037s
+took 0.035s
 ```json
 {
   "runs": 200,
@@ -65,7 +65,7 @@ took 0.016s
 ```
 
 ## ✅ privacy fuzz: 5000 random flows — DM->public always blocked without a token
-took 0.008s
+took 0.009s
 ```json
 {
   "flows": 5000,
@@ -105,7 +105,7 @@ took 0.032s
 ```
 
 ## ✅ concurrency: 8 threads x 500 appends — ledger stays readable, nothing lost
-took 0.359s
+took 0.33s
 ```json
 {
   "threads": 8,

@@ -869,17 +869,19 @@ def _build_onboarding(ledger, iso, registry, seed_terms):
         notes.append(f"check-in digests stage to {checkin_target} when "
                      "something settles or breaks (still your ✅ to post)")
 
-    raw_dpp = os.environ.get("TRELLIS_DOCS_PER_PASS", "").strip()
-    try:
-        docs_per_pass = int(raw_dpp) if raw_dpp else 150
-    except ValueError:
-        docs_per_pass = 150
+    def _int_env(name, default):
+        raw = os.environ.get(name, "").strip()
+        try:
+            return int(raw) if raw else default
+        except ValueError:
+            return default
     workspace = Workspace(_workspace_root(), ledger)
     ritual = OnboardingRitual(ledger, workspace, provider=provider,
                               verifier=verifier, registry=registry,
                               seed_terms=seed_terms,
                               outbox=outbox, checkin_target=checkin_target,
-                              docs_per_pass=docs_per_pass)
+                              docs_per_pass=_int_env("TRELLIS_DOCS_PER_PASS", 150),
+                              days_per_pass=_int_env("TRELLIS_DAYS_PER_PASS", 2))
     return ritual, sources, backfill, client, iso, surfaces, notes
 
 
@@ -901,6 +903,8 @@ def _print_pass_summary(summary: dict) -> None:
     minted = [t for t in summary.get("terms_minted", []) if t]
     if minted:
         print(f"  curious about: {', '.join(minted)}")
+    for d in summary.get("days_digested", []):
+        print(f"  📅 read {d} as a unit — see map/days/{d}.md")
     for p in summary.get("terms_pursued", []):
         print(f"  · '{p['term']}' — {p['outcome']}")
     for t in summary.get("presence_questions", []):

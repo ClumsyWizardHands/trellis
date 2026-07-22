@@ -247,6 +247,7 @@ _STAGES = {
     "onboard_pass":        ("RESTING", "learning pass recorded — the next one runs on the half-hour"),
     "context_manifest":    ("THINKING", "compiling the context packet a model will reason over"),
     "onboard_stage":       ("WORKING", "a learning-pass stage is underway (detail in the tail)"),
+    "day_digest":          ("READING", "reading one day of the record as a unit, newest first"),
 }
 
 
@@ -275,6 +276,9 @@ def _describe_event(e) -> str:
         return f"checkpointed #{str(b.get('channel','?'))[:24]}"
     if k == "onboard_stage":
         return f"stage: {b.get('stage','?')} — {str(b.get('detail',''))[:80]}"
+    if k == "day_digest":
+        return (f"read day {b.get('day','?')} as a unit — "
+                f"“{str(b.get('summary',''))[:60]}”")
     return k.replace("_", " ")
 
 

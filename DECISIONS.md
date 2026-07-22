@@ -1090,6 +1090,43 @@ the EoC deployment — starts useful within minutes.
 
 ---
 
+## D53 — Comprehension walks the record day by day, newest first ✅ fresh
+
+**Decision:** understanding is produced in **day-sized, checkable increments**, not over
+the corpus at once. Each learning pass reads up to `TRELLIS_DAYS_PER_PASS` (default 2)
+not-yet-digested **days as units**, newest first: one bounded model reading per day
+("what happened, what's notable, what does this day leave unclear — from these items
+alone, import nothing"), folded onto one `day_digest` ledger entry and one
+`map/days/YYYY-MM-DD.md` note, confidence capped at 0.7 until confirmed. Term-meaning
+evidence is **recency-weighted** (a few earliest uses as the lineage anchor + the most
+recent as the current meaning) — never the oldest N, which quietly builds today's
+assumption on last year's usage. The comprehension surface counts **days-read-as-units
+vs days-in-record** alongside items-walked.
+
+**Triangulation:**
+1. Alex, 2026-07-22: "let me look at today… what do I need to learn from the day
+   before? … what if it built an assumption on the entire year's worth of
+   transcriptions? That could be very bad… swallow a little, process, understand that
+   it's not finished, and keep going."
+2. The worry was CONFIRMED in code review: `propose_meaning` read the FIRST (oldest)
+   evidence ids — "empire" would have been read from May 2025 — the exact
+   stale-assumption failure, found because the pacing question was pushed.
+3. D52 (recency-first acquisition) is the intake half; D53 is the comprehension half —
+   together: swallow a little, newest first; read it as a day; record what's unclear;
+   descend where the unclear points.
+4. Auditability (Alex's stated reason): a per-day digest localizes error — "you can
+   check and see where the logic is going wrong" on a specific day, instead of
+   auditing a year-sized inference.
+
+**Consequence:** `onboard._digest_days` / `_propose_day_digest` / `_write_day_note`
+(day notes in the vault, `day_digest` folded entries), recency-weighted
+`term_lineage.entry_ids` + excerpt selection, `evidence_window` honesty on every term
+observation, day counts in `comprehension()`, check-ins link the days walked. Honest
+scope: day digests are not yet panel-verified (capped confidence + explicit basis
+instead) — panel verification of digests is a named follow-up.
+
+---
+
 ## ⏳ Watch list (decisions deliberately NOT taken)
 
 - **W1 — No skill marketplace / no auto-installed skills.** [OPENCLAW] supply-chain

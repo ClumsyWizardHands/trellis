@@ -54,6 +54,7 @@ from .verify import (CompletionClaim, Evidence, EvidenceKind, VerdictStatus,
 
 CONSENT_KIND = "onboard_consent"
 STAGE_KIND = "onboard_stage"
+DAY_DIGEST_KIND = "day_digest"
 INTRO_KIND = "onboard_introduction"
 PASS_KIND = "onboard_pass"
 TERM_OBSERVATION_KIND = "term_observation"
@@ -353,9 +354,15 @@ class TermLineage:
 def term_lineage(ledger: Ledger, term: str, max_evidence: int = 50) -> TermLineage:
     """Walk the record for a term, oldest→newest: who used it first, who used
     it last, everyone in between, where, and with what casing. Deterministic —
-    no model touches this; it is the archaeology the meaning must rest on."""
+    no model touches this; it is the archaeology the meaning must rest on.
+
+    Evidence is RECENCY-WEIGHTED (Alex's worry, 2026-07-22, confirmed real):
+    the kept ids are the few EARLIEST uses (the lineage anchor) plus the many
+    MOST RECENT (the current meaning) — never just the oldest 50, which would
+    quietly build today's assumption on last year's usage."""
     lin = TermLineage(term=term.strip().lower())
     pat = re.compile(re.escape(lin.term).replace(r"\ ", r"\s+"), re.IGNORECASE)
+    all_ids: List[str] = []
     for e in _corpus(ledger):
         content = str(e.body.get("content", ""))
         m = pat.search(content)
@@ -374,8 +381,7 @@ def term_lineage(ledger: Ledger, term: str, max_evidence: int = 50) -> TermLinea
                "where": where, "excerpt": _excerpt(content, m.start()),
                "entry_id": e.id}
         lin.occurrences += 1
-        if len(lin.entry_ids) < max_evidence:
-            lin.entry_ids.append(e.id)
+        all_ids.append(e.id)
         if lin.first_use is None:
             lin.first_use = use
         lin.latest_use = use
@@ -385,6 +391,11 @@ def term_lineage(ledger: Ledger, term: str, max_evidence: int = 50) -> TermLinea
             lin.channels.append(where)
         for raw in re.findall(pat, content):
             lin.case_variants[raw] = lin.case_variants.get(raw, 0) + 1
+    if len(all_ids) <= max_evidence:
+        lin.entry_ids = all_ids
+    else:
+        anchor = max(1, max_evidence // 10)          # a few earliest, kept for lineage
+        lin.entry_ids = all_ids[:anchor] + all_ids[-(max_evidence - anchor):]
     return lin
 
 
@@ -411,8 +422,13 @@ def propose_meaning(provider, term: str, lineage: TermLineage,
     silently retried into confabulation."""
     if provider is None or not lineage.entry_ids:
         return None
+    # recency-weighted reading: a couple of the EARLIEST uses (how the meaning
+    # began) + the MOST RECENT (what it means NOW) — chronological order kept.
+    ids = list(lineage.entry_ids)
+    if len(ids) > max_excerpts:
+        ids = ids[:2] + ids[-(max_excerpts - 2):]
     excerpts = []
-    for eid in lineage.entry_ids[:max_excerpts]:
+    for eid in ids:
         e = ledger.get(eid)
         if e is None:
             continue
@@ -511,6 +527,9 @@ def record_term_observation(ledger: Ledger, workspace: Workspace,
               "lineage": lineage.to_body(), "meaning": meaning,
               "meaning_basis": basis,
               "unsure": (proposed or {}).get("unsure", ""),
+              "evidence_window": f"cited {len(lineage.entry_ids)} of "
+                                 f"{lineage.occurrences} use(s) — the earliest "
+                                 "plus the most recent (recency-weighted)",
               "confidence": confidence,
               "human_confirmed_by": human_confirmed_by,
               "provenance": prov.to_dict()},
@@ -537,6 +556,7 @@ def _write_term_note(workspace: Workspace, obs: Entry, lineage: TermLineage,
         f"# Term: {lineage.term}",
         "",
         f"- confidence: {conf} — {b.get('meaning_basis')}",
+        f"- evidence: {b.get('evidence_window', '—')}",
         f"- machine-transcribed inputs: {b['provenance'].get('machine_transcribed')}",
         f"- observation: ledger `{obs.id}`",
         "",
@@ -663,8 +683,14 @@ def comprehension(ledger: Ledger) -> dict:
         elif e.body.get("status") == "resolved":
             known_terms += 1
     pct = round(100.0 * walked / len(corpus_ids), 1) if corpus_ids else 0.0
+    # D53: the day-walk is its own comprehension axis — how much of the
+    # record's TIME has been read as units, not just how many items.
+    day_set = {e.stamp.event_time.date().isoformat() for e in corpus}
+    digested = {e.body.get("day") for e in ledger.active(DAY_DIGEST_KIND)}
     return {"ingested": len(corpus_ids), "walked": walked, "pct_walked": pct,
-            "terms_open": open_terms, "terms_known": known_terms}
+            "terms_open": open_terms, "terms_known": known_terms,
+            "days_total": len(day_set),
+            "days_digested": len(day_set & digested)}
 
 
 def _presence(ledger: Ledger) -> dict:
@@ -856,7 +882,7 @@ class OnboardingRitual:
                  seed_terms: Optional[List[str]] = None,
                  scout: Optional[TermScout] = None,
                  outbox=None, checkin_target: str = "",
-                 docs_per_pass: int = 150):
+                 docs_per_pass: int = 150, days_per_pass: int = 2):
         self.ledger = ledger
         self.workspace = workspace
         self.ground = ground or ledger.ground
@@ -877,6 +903,9 @@ class OnboardingRitual:
         # inhaling the archive before understanding anything. Corrections are
         # never deferred (a wrong record beats a paced one for urgency).
         self.docs_per_pass = max(1, int(docs_per_pass))
+        # D53: how many not-yet-digested DAYS each pass reads as units,
+        # newest first — comprehension walks backward through time.
+        self.days_per_pass = max(0, int(days_per_pass))
 
     # ----- the pass ----------------------------------------------------------
 
@@ -952,6 +981,11 @@ class OnboardingRitual:
                 mint_presence_curiosities(self.ledger, self.qlog,
                                           self.author, self.ground)]
 
+            # D53: read a couple of days as units, newest first, BEFORE term
+            # pursuit — the day walk is the comprehension anchor.
+            summary["days_digested"] = self._digest_days(self.days_per_pass,
+                                                         now)
+
             from .verify import contested_items
             contested_before = len(contested_items(self.ledger))
             summary.update(self._pursue_terms(max_terms))
@@ -971,6 +1005,130 @@ class OnboardingRitual:
                    f"{summary['open_unknowns']} unknown(s) on the record",
                    evidence=[entry.id])
         return summary
+
+    # ----- D53: comprehension walks the record one day at a time ------------
+
+    _DAY_SYSTEM = (
+        "You are reading ONE DAY of a team's record, as a unit. Say what "
+        "happened THAT day, from these items alone — do not import outside "
+        "knowledge, do not connect to days you have not been shown. If the day "
+        "does not explain something, that is an UNCLEAR item, not a guess. "
+        "Reply ONLY with JSON: {\"summary\": str (2-4 plain sentences), "
+        "\"notable\": [str] (up to 4), \"unclear\": [str] (up to 4 — what this "
+        "day leaves unexplained), \"confidence\": number 0..1}.")
+
+    def _days_with_material(self) -> dict:
+        days: dict = {}
+        for e in _corpus(self.ledger):
+            days.setdefault(e.stamp.event_time.date().isoformat(), []).append(e)
+        return days
+
+    def _digested_days(self) -> set:
+        return {e.body.get("day") for e in self.ledger.active(DAY_DIGEST_KIND)}
+
+    def _digest_days(self, max_days: int, now=None) -> list:
+        """Read up to `max_days` not-yet-digested days as UNITS, newest first —
+        'let me look at today; what do I need from the day before?' (D53).
+        Each digest is one small, checkable increment: its evidence is ONE
+        day's material, its confidence is capped, its unclear list is explicit
+        — so when the logic goes wrong, you can see WHICH day it went wrong on,
+        instead of auditing an assumption built over a year at once."""
+        days = self._days_with_material()
+        done = self._digested_days()
+        todo = sorted((d for d in days if d not in done), reverse=True)[:max_days]
+        digested = []
+        for day in todo:
+            entries = sorted(days[day], key=lambda e: e.stamp.event_time)
+            self._stage("digest", f"reading the day {day} as a unit "
+                        f"({len(entries)} item(s))", now)
+            proposed = self._propose_day_digest(day, entries)
+            voices = sorted({e.author for e in entries
+                             if e.kind == "discord_message"})
+            body = {"day": day, "items": len(entries),
+                    "voices": voices[:25], "voices_total": len(voices),
+                    "summary": "", "notable": [], "unclear": [],
+                    "confidence": 0.3,
+                    "basis": "counts only — no model reading yet",
+                    "provenance": _merge_provenance(
+                        self.ledger, [e.id for e in entries[:50]],
+                        self.ground.now()).to_dict()}
+            if proposed:
+                body.update(summary=proposed["summary"],
+                            notable=proposed["notable"],
+                            unclear=proposed["unclear"],
+                            confidence=round(min(MODEL_MEANING_CONFIDENCE_CAP,
+                                                 proposed["confidence"]), 3),
+                            basis="model reading of this one day; unconfirmed")
+            prior = next((e for e in self.ledger.active(DAY_DIGEST_KIND)
+                          if e.body.get("day") == day), None)
+            entry = self.ledger.append(
+                kind=DAY_DIGEST_KIND, author=self.author, body=body,
+                event_time=now, tags=("onboard", "day", day),
+                supersedes=prior.id if prior else None)
+            self._write_day_note(day, body, entry.id)
+            digested.append(day)
+        return digested
+
+    def _propose_day_digest(self, day: str, entries: list) -> Optional[dict]:
+        if self.provider is None:
+            return None
+        rows = entries[-30:]              # bounded; the newest of a huge day
+        lines = []
+        for e in rows:
+            who = (e.author if e.kind == "discord_message"
+                   else f"(document) {str(e.body.get('title', '?'))[:40]}")
+            lines.append(f"[{e.stamp.event_time.strftime('%H:%M')} {who}] "
+                         f"{str(e.body.get('content', ''))[:160]}")
+        user = (f"The day: {day} ({len(entries)} item(s); showing "
+                f"{len(rows)}).\n" + fence_untrusted("\n".join(lines))
+                + "\n\nWhat happened THIS day? JSON only.")
+        try:
+            resp = self.provider.complete(system=self._DAY_SYSTEM,
+                                          messages=[{"role": "user",
+                                                     "content": user}])
+        except Exception:
+            return None
+        text = (getattr(resp, "text", "") or "").strip()
+        s, e_ = text.find("{"), text.rfind("}")
+        if s == -1 or e_ == -1:
+            return None
+        try:
+            d = json.loads(text[s:e_ + 1])
+        except ValueError:
+            return None
+        if not isinstance(d, dict) or not isinstance(d.get("summary"), str):
+            return None
+        try:
+            conf = max(0.0, min(1.0, float(d.get("confidence", 0.0))))
+        except (TypeError, ValueError):
+            conf = 0.0
+        clean = lambda xs: [str(x)[:200] for x in xs if str(x).strip()][:4] \
+            if isinstance(xs, list) else []
+        return {"summary": d["summary"].strip()[:1200],
+                "notable": clean(d.get("notable")),
+                "unclear": clean(d.get("unclear")), "confidence": conf}
+
+    def _write_day_note(self, day: str, body: dict, entry_id: str) -> None:
+        lines = [f"# Day: {day}", "",
+                 f"- confidence: {body['confidence']} — {body['basis']}",
+                 f"- {body['items']} item(s), voices: "
+                 f"{', '.join(body['voices'][:8]) or '—'}"
+                 + (f" … and {body['voices_total'] - 8} more"
+                    if body['voices_total'] > 8 else ""),
+                 f"- digest: ledger `{entry_id}`", ""]
+        lines += ["## What happened",
+                  body["summary"] or "_(no model reading yet — counts only)_"]
+        if body["notable"]:
+            lines += ["", "## Notable"] + [f"- {n}" for n in body["notable"]]
+        if body["unclear"]:
+            lines += ["", "## What this day leaves unclear"] \
+                     + [f"- {u}" for u in body["unclear"]]
+        self.workspace.write(
+            f"map/days/{day}.md", "\n".join(lines), author=self.author,
+            title=f"Day map {day}: what happened, what is unclear",
+            synthesis_justification=(
+                f"the folded one-day reading of {day} exists nowhere else — "
+                "the raw record holds the items, not the day understood as a unit"))
 
     def _stage(self, stage: str, detail: str, now=None) -> None:
         """A tiny heartbeat at each stage boundary — because a stage that only
@@ -1048,12 +1206,17 @@ class OnboardingRitual:
         if stale:
             lines.append("\n## Overdue curiosities (help me close these)")
             lines += [f"- {q.body.get('title')}" for q in stale]
+        if summary.get("days_digested"):
+            lines.append("\n## Days walked this pass (newest first)")
+            lines += [f"- [{d}](days/{d}.md)" for d in summary["days_digested"]]
         lines.append("\n## Where understanding actually stands")
         lines.append(f"- walked {comp.get('walked', 0)} of "
                      f"{comp.get('ingested', 0)} ingested items "
                      f"({comp.get('pct_walked', 0)}%) · "
                      f"{comp.get('terms_known', 0)} meaning(s) known, "
-                     f"{comp.get('terms_open', 0)} open")
+                     f"{comp.get('terms_open', 0)} open · "
+                     f"{comp.get('days_digested', 0)}/{comp.get('days_total', 0)} "
+                     "day(s) read as units")
         lines.append("- this is meant to take many sessions — tell me what is "
                      "right, what is incorrect, and what is wrong, and I will "
                      "fold it in.")
