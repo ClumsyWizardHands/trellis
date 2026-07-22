@@ -229,7 +229,9 @@ trellis demo         # a full witness cycle, offline, no accounts
 
 Then pick a model seat (`TRELLIS_PROVIDER` = `local` for Gemma/Ollama, `openai`, or
 `claude`), point it at your own surfaces (Obsidian vault, your own Discord bot), and
-re-run `trellis doctor`. A fresh install is **inert** — it touches nothing but the
+re-run `trellis doctor`. The `claude` seat runs on your **Claude Max subscription** (via
+`claude login` / `claude setup-token`, no API key needed) or an `ANTHROPIC_API_KEY` if you
+prefer per-token billing. A fresh install is **inert** — it touches nothing but the
 offline demo until you configure a surface. Full walkthrough (and a section for AI
 assistants setting it up): **[docs/SETUP.md](docs/SETUP.md)**.
 

@@ -43,14 +43,24 @@ Set `TRELLIS_PROVIDER` in `.env` to **one** of:
 | `mock` | offline, deterministic, no accounts | nothing | core |
 | `local` | any OpenAI-compatible endpoint — **Gemma via Ollama**, LM Studio, llama.cpp, vLLM | `TRELLIS_LOCAL_BASE_URL`, `TRELLIS_LOCAL_MODEL` | core (stdlib) |
 | `openai` | hosted OpenAI | `OPENAI_API_KEY`, `TRELLIS_OPENAI_MODEL` | core (stdlib) |
-| `claude` | Claude Agent SDK | `ANTHROPIC_API_KEY` | `pip install -e '.[claude]'` |
+| `claude` | Claude Agent SDK | your **Claude Max subscription** (`claude login`) *or* `ANTHROPIC_API_KEY` | `pip install -e '.[claude]'` |
 
 Local Gemma example: run `ollama serve`, `ollama pull gemma3`, then set
 `TRELLIS_PROVIDER=local`, `TRELLIS_LOCAL_BASE_URL=http://localhost:11434/v1`,
 `TRELLIS_LOCAL_MODEL=gemma3`. `trellis doctor` will probe it and report context honesty.
 
-> **Subscription logins (OpenAI "Max"/ChatGPT, Claude Max) are not wired yet.** They ride
-> undocumented endpoints with real ToS risk. Use an API key or a local model for now.
+> **Run it on your Claude Max subscription (no API key).** The `claude` seat uses the
+> Claude Agent SDK, which authenticates with your subscription the same way Claude Code
+> does — this is a supported path (it is reverse-engineering the raw OAuth endpoints, which
+> trellis does NOT do, that carries ToS risk). Two ways:
+> - **Interactive:** run `claude login` once; set `TRELLIS_PROVIDER=claude` and leave
+>   `ANTHROPIC_API_KEY` unset. The SDK uses your subscription automatically.
+> - **Unattended (best for the always-on runner):** run `claude setup-token`, then set the
+>   printed `CLAUDE_CODE_OAUTH_TOKEN` (a ~1-year token — no periodic re-login).
+>
+> `trellis doctor` reports which credential the seat will use and refuses READY only when it
+> finds none. An `ANTHROPIC_API_KEY`, if set, takes precedence (per-token API billing).
+> *(OpenAI's "Max"/ChatGPT subscription login is still not wired — API key or local for that.)*
 
 ## Connect surfaces (all optional, all independent)
 

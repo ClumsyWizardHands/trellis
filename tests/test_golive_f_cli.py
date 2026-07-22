@@ -145,10 +145,18 @@ def _claude_provider():
     return prov
 
 
-def test_claude_preflight_missing_key_fails(monkeypatch):
+def _clear_all_creds(monkeypatch):
+    for v in ("ANTHROPIC_API_KEY", "CLAUDE_CODE_OAUTH_TOKEN", "ANTHROPIC_AUTH_TOKEN"):
+        monkeypatch.delenv(v, raising=False)
+    # isolate from the running machine's real `claude login` creds
+    import trellis.providers.claude_sdk as cs
+    monkeypatch.setattr(cs, "_subscription_login_present", lambda: False)
+
+
+def test_claude_preflight_no_credential_at_all_fails(monkeypatch):
     from trellis.providers import ProviderUnavailable
-    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
-    with pytest.raises(ProviderUnavailable, match="ANTHROPIC_API_KEY"):
+    _clear_all_creds(monkeypatch)
+    with pytest.raises(ProviderUnavailable, match="subscription|ANTHROPIC_API_KEY"):
         _claude_provider().preflight()
 
 
@@ -162,7 +170,24 @@ def test_claude_preflight_malformed_key_fails(monkeypatch):
 def test_claude_preflight_wellformed_key_ok(monkeypatch):
     monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-abc123def456")
     info = _claude_provider().preflight()
-    assert info["ok"] is True
+    assert info["ok"] is True and info["auth"] == "api_key"
+
+
+def test_claude_preflight_subscription_oauth_token_ok(monkeypatch):
+    # the Max path: no API key, a subscription token → READY on the subscription
+    _clear_all_creds(monkeypatch)
+    monkeypatch.setenv("CLAUDE_CODE_OAUTH_TOKEN", "sk-ant-oat01-abc")
+    info = _claude_provider().preflight()
+    assert info["ok"] is True and info["auth"] == "subscription_token"
+
+
+def test_claude_preflight_local_login_ok(monkeypatch):
+    # `claude login` creds detected on disk → READY on the subscription
+    _clear_all_creds(monkeypatch)
+    import trellis.providers.claude_sdk as cs
+    monkeypatch.setattr(cs, "_subscription_login_present", lambda: True)
+    info = _claude_provider().preflight()
+    assert info["ok"] is True and info["auth"] == "subscription_login"
 
 
 # --------------------------------------------------------------------------- #

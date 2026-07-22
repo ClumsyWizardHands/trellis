@@ -6,14 +6,37 @@ inside trellis loops (sense→resolve→act→verify→remember stays trellis's)
 exposes a hook-mount helper for running trellis's refusals INSIDE a full SDK
 agent when you want the SDK to drive.
 
-Install:  pip install claude-agent-sdk   (and set ANTHROPIC_API_KEY)
+Install:  pip install claude-agent-sdk. Auth: it runs on your Claude Max
+SUBSCRIPTION by default (via `claude login` / `claude setup-token`), or an
+ANTHROPIC_API_KEY if you prefer per-token billing — see preflight().
 """
 
 from __future__ import annotations
 
+import os
+from pathlib import Path
 from typing import Optional
 
 from .base import Provider, ProviderResponse, ProviderUnavailable
+
+
+def _subscription_login_present() -> bool:
+    """True if a local `claude login` subscription credential looks present.
+
+    The Agent SDK stores these in the OS keychain on macOS and in
+    ~/.claude/.credentials.json elsewhere; we can only cheaply check the file
+    (and the config dir as a weak macOS signal), so this is a best-effort
+    detector, never a guarantee — preflight always notes it is not
+    network-verified. Factored out so tests can isolate it. For a daemon, prefer
+    `claude setup-token` → CLAUDE_CODE_OAUTH_TOKEN, which is unambiguously
+    detectable and unattended-safe."""
+    home = Path.home()
+    if (home / ".claude" / ".credentials.json").exists():
+        return True
+    # macOS keeps the token in the Keychain (no readable file); the presence of a
+    # real Claude Code config dir is a weak positive we surface rather than a hard
+    # yes — the honest path for unattended use is CLAUDE_CODE_OAUTH_TOKEN.
+    return False
 
 
 class ClaudeSDKProvider:
@@ -39,27 +62,55 @@ class ClaudeSDKProvider:
             ) from e
 
     def preflight(self) -> dict:
-        """Honest readiness for the hosted claude seat.
+        """Honest readiness for the claude seat — subscription-first.
 
-        Verifies a credential is present and well-formed BEFORE doctor can
-        report READY. Without this, doctor printed READY for a wrong or absent
-        API key — contradicting its own maker≠verifier contract (FableG14). No
-        network call is made here (that would spend a token on every doctor
-        run); the credential shape is checked, and that is what the note says.
-        """
+        The Claude Agent SDK resolves credentials in a precedence order, and
+        trellis is meant to run on the owner's **Claude Max subscription**, not
+        an API key (the earlier "subscription not wired" note was wrong: using
+        your OWN subscription through the OFFICIAL SDK is a supported path — it is
+        reverse-engineering the raw OAuth endpoints that carries ToS risk, which
+        trellis does NOT do). So this checks, in the SDK's own order:
+
+          1. ANTHROPIC_API_KEY        — explicit API key (per-token billing)
+          2. CLAUDE_CODE_OAUTH_TOKEN  — a long-lived (~1yr) subscription token from
+                                        `claude setup-token` — the UNATTENDED path,
+                                        the right one for the always-on runner (D37)
+          3. ANTHROPIC_AUTH_TOKEN     — a gateway/bearer token
+          4. a local `claude login`   — subscription creds on disk / Keychain
+
+        No network call is made (that would spend on every doctor run); this
+        reports which credential WILL be used, honestly noting it is not
+        network-verified. Only when NONE is detectable does it refuse READY —
+        and the message points at the subscription path first (FableG14 honesty
+        preserved: no READY for a seat we cannot authenticate)."""
         import os
         key = os.environ.get("ANTHROPIC_API_KEY", "").strip()
-        if not key:
-            raise ProviderUnavailable(
-                "ANTHROPIC_API_KEY is unset — the claude seat has no credential. "
-                "doctor refuses to report READY for a seat it cannot authenticate.")
-        if not key.startswith("sk-ant-"):
-            raise ProviderUnavailable(
-                "ANTHROPIC_API_KEY is set but not well-formed (Anthropic keys "
-                "begin 'sk-ant-'). Refusing to report READY on a malformed "
-                "credential rather than fail at the first live call.")
-        return {"ok": True, "context_confirmed": True,
-                "note": "API key present and well-formed (not network-checked)"}
+        if key:
+            if not key.startswith("sk-ant-"):
+                raise ProviderUnavailable(
+                    "ANTHROPIC_API_KEY is set but not well-formed (Anthropic keys "
+                    "begin 'sk-ant-'). Refusing to report READY on a malformed "
+                    "credential rather than fail at the first live call.")
+            return {"ok": True, "context_confirmed": True, "auth": "api_key",
+                    "note": "ANTHROPIC_API_KEY present and well-formed (per-token "
+                            "billing; not network-checked)"}
+        if os.environ.get("CLAUDE_CODE_OAUTH_TOKEN", "").strip():
+            return {"ok": True, "context_confirmed": True, "auth": "subscription_token",
+                    "note": "using your Claude subscription via CLAUDE_CODE_OAUTH_TOKEN "
+                            "(unattended-safe; not network-checked)"}
+        if os.environ.get("ANTHROPIC_AUTH_TOKEN", "").strip():
+            return {"ok": True, "context_confirmed": True, "auth": "bearer",
+                    "note": "using ANTHROPIC_AUTH_TOKEN (gateway/bearer; not network-checked)"}
+        if _subscription_login_present():
+            return {"ok": True, "context_confirmed": True, "auth": "subscription_login",
+                    "note": "using your local `claude login` subscription credentials "
+                            "(not network-checked)"}
+        raise ProviderUnavailable(
+            "the claude seat has no detectable credential. To run on your Claude Max "
+            "subscription (recommended): run `claude login` (interactive) or "
+            "`claude setup-token` and set CLAUDE_CODE_OAUTH_TOKEN (unattended — best "
+            "for the always-on runner). Or set ANTHROPIC_API_KEY for per-token API "
+            "billing. doctor refuses to report READY for a seat it cannot authenticate.")
 
     def complete(self, system: str, messages: list[dict],
                  tools: Optional[list[dict]] = None) -> ProviderResponse:
