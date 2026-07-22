@@ -53,6 +53,7 @@ from .verify import (CompletionClaim, Evidence, EvidenceKind, VerdictStatus,
                      convene_verification)
 
 CONSENT_KIND = "onboard_consent"
+STAGE_KIND = "onboard_stage"
 INTRO_KIND = "onboard_introduction"
 PASS_KIND = "onboard_pass"
 TERM_OBSERVATION_KIND = "term_observation"
@@ -904,9 +905,14 @@ class OnboardingRitual:
                 return summary
 
             if backfill is not None:
+                self._stage("backfill", "descending Discord history, newest "
+                            "first, curiosity-deepened", now)
                 summary["backfill"] = backfill.run(
                     now, focus_channels=self._focus_channels()).to_body()
 
+            if sources:
+                self._stage("sources", "reading document sources, newest first, "
+                            "paced", now)
             for adapter in (sources or []):
                 name = type(adapter).__name__
                 # several adapters of one class (two transcript folders, two
@@ -930,6 +936,8 @@ class OnboardingRitual:
                     # one bad surface never silences the others.
                     summary["awaiting"].append({"source": name, "why": str(e)})
 
+            self._stage("scout", "scanning the corpus for loaded terms and "
+                        "quiet voices", now)
             candidates = self.scout.scan(
                 (e.author, str(e.body.get("content", "")))
                 for e in _corpus(self.ledger))
@@ -949,6 +957,7 @@ class OnboardingRitual:
             summary.update(self._pursue_terms(max_terms))
             new_contested = len(contested_items(self.ledger)) - contested_before
 
+            self._stage("map", "writing the navigable map + the check-in", now)
             summary["map_files"] = write_map_overview(
                 self.ledger, self.workspace, self.registry, self.qlog,
                 self.author, self.ground)
@@ -962,6 +971,15 @@ class OnboardingRitual:
                    f"{summary['open_unknowns']} unknown(s) on the record",
                    evidence=[entry.id])
         return summary
+
+    def _stage(self, stage: str, detail: str, now=None) -> None:
+        """A tiny heartbeat at each stage boundary — because a stage that only
+        computes, or waits on a model, writes nothing and reads as 'stopped'
+        (Alex hit exactly this, 2026-07-22). Six small entries per pass keep
+        the Right-now panel truthful through the silent stretches."""
+        self.ledger.append(kind=STAGE_KIND, author=self.author,
+                           body={"stage": stage, "detail": detail},
+                           event_time=now, tags=("onboard", "stage", stage))
 
     # ----- D52: pacing + curiosity focus ------------------------------------
 
@@ -1082,6 +1100,10 @@ class OnboardingRitual:
                 open_terms.append((q.id not in stale_ids, q, term))
         open_terms.sort(key=lambda t: t[0])          # stale (False) first
         for _, q, term in open_terms[:max_terms]:
+            self._stage("pursue", f"pursuing '{term}' — tracing lineage, then "
+                        "the model proposes and the panel judges (model stages "
+                        "can be minutes of ledger silence; this marker is why "
+                        "you still see what's happening)")
             lineage = term_lineage(self.ledger, term)
             akey = q.body.get("assumption_key")
             if lineage.occurrences == 0:

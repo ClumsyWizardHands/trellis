@@ -246,6 +246,7 @@ _STAGES = {
     "memory_write":        ("MAPPING", "writing the navigable map beside the record"),
     "onboard_pass":        ("RESTING", "learning pass recorded — the next one runs on the half-hour"),
     "context_manifest":    ("THINKING", "compiling the context packet a model will reason over"),
+    "onboard_stage":       ("WORKING", "a learning-pass stage is underway (detail in the tail)"),
 }
 
 
@@ -272,6 +273,8 @@ def _describe_event(e) -> str:
         return f"pass: {b.get('status','?')} · {len(b.get('terms_pursued') or [])} term(s) pursued"
     if k == "discord_poll_cursor":
         return f"checkpointed #{str(b.get('channel','?'))[:24]}"
+    if k == "onboard_stage":
+        return f"stage: {b.get('stage','?')} — {str(b.get('detail',''))[:80]}"
     return k.replace("_", " ")
 
 
@@ -285,6 +288,14 @@ def _now_panel(led: Ledger) -> str:
         dominant = Counter(x.kind for x in recent).most_common(1)[0][0]
         stage, phrase = _STAGES.get(dominant, ("WORKING", f"writing {dominant} entries"))
         sub = f"{esc(phrase)} · <b>{len(recent)}</b> ledger writes in the last 90s"
+    elif entries and entries[-1].kind in ("onboard_stage", "context_manifest"):
+        # the LAST thing written was a stage marker — a compute/model stretch
+        # is underway; ledger silence here is thinking, not death.
+        age = int((now - entries[-1].stamp.write_time).total_seconds())
+        stage = "THINKING"
+        sub = (f"{esc(_describe_event(entries[-1]))} — in progress, started "
+               f"{age}s ago (model and compute stages write nothing until "
+               "they land; this marker is how you can tell)")
     elif entries:
         age = int((now - entries[-1].stamp.write_time).total_seconds())
         stage = "QUIET"
