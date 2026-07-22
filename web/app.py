@@ -141,6 +141,7 @@ border-radius:9px;padding:10px 12px;margin-bottom:16px}
 .legend b{color:var(--ink)}
 button{background:var(--acc);color:#04101f;border:0;border-radius:6px;padding:6px 12px;font-weight:600;cursor:pointer}
 button.deny{background:transparent;color:var(--bad);border:1px solid var(--bad)}
+button.good{background:var(--ok);color:#03180a}
 input{background:#0d1117;border:1px solid var(--line);color:var(--ink);border-radius:6px;padding:5px 8px}
 .feed li{list-style:none;padding:7px 0;border-bottom:1px solid var(--line);display:flex;gap:10px}
 .feed{padding:0;margin:0}.who{color:var(--acc);font-weight:600}
@@ -764,29 +765,68 @@ def _curiosities_body(led: Ledger) -> str:
     if c["stale_count"]:
         out.append(f'<div class="attn small" style="margin-bottom:10px">⚠ {c["stale_count"]} '
                    'question(s) overdue — surface these before anything else.</div>')
-    from trellis.onboard import term_from_assumption
+    from trellis.decisions import question_key
+    from trellis.onboard import TERM_OBSERVATION_KIND, term_from_assumption
+    obs_by_key = {e.body.get("term_key"): e
+                  for e in led.active(TERM_OBSERVATION_KIND)}
     for q in c["open"]:
         badge = '<span class="pill hn">overdue</span> ' if q["stale"] else ""
         dry = (f' · <span class="warn small">dry streak {q["dry_streak"]}</span>'
                if q["dry_streak"] else "")
         reask = f' · re-asked ×{q["reasked"]}' if q["reasked"] else ""
-        out.append(f'<div class="panel"><div>{badge}<b>{esc(q["title"])}</b></div>'
-                   f'<div class="muted small" style="margin-top:4px">assuming: '
-                   f'{esc(q["assumption"])}</div>'
-                   f'<div class="muted small">would resolve it: {esc(q["what_would_resolve"])}</div>'
-                   f'<div class="muted small">owner: {esc(q["owner"])}{dry}{reask}</div>')
-        # a TERM curiosity can be answered by the human right here — the same
-        # authenticated seat as every other web write; closes at 0.95.
         term = term_from_assumption(q.get("assumption") or "")
-        if term:
+        out.append(f'<div class="panel"><div>{badge}<b>{esc(q["title"])}</b>'
+                   f'<span class="muted small"> · owner {esc(q["owner"])}'
+                   f'{dry}{reask}</span></div>')
+        if not term:
+            # non-term curiosities (presence etc.) keep the full question shape
+            out.append(f'<div class="muted small" style="margin-top:4px">'
+                       f'{esc(q["what_would_resolve"])}</div>')
+        else:
+            # TERM curiosity: LEAD WITH TRELLIS'S OWN ATTEMPT (Alex, 2026-07-22:
+            # "trellis should have plenty of agency to come up with a good try"
+            # — the human's job is confirm-or-correct, never write-from-scratch).
+            obs = obs_by_key.get("term:" + question_key(term))
+            b = obs.body if obs is not None else {}
+            meaning = (b.get("meaning") or "").strip()
+            if meaning:
+                out.append(
+                    f'<div style="margin-top:6px">my read '
+                    f'<span class="muted small">(confidence {b.get("confidence")} '
+                    '— unconfirmed until the panel or you)</span>: '
+                    f'<b>{esc(meaning)}</b></div>')
+                if b.get("unsure"):
+                    out.append(f'<div class="muted small">still unsure: '
+                               f'{esc(b["unsure"])}</div>')
+                if b.get("evidence_window"):
+                    out.append(f'<div class="muted small">{esc(b["evidence_window"])}</div>')
+                placeholder = "edit my read if it's off — submitting confirms it"
+                button = "✓ Yes — that's what it means"
+                prefill = f' value="{esc(meaning)}"'
+            elif obs is not None:
+                lin = b.get("lineage") or {}
+                out.append(f'<div class="muted small" style="margin-top:4px">'
+                           f'traced ({lin.get("occurrences", "?")} use(s)) — '
+                           'no proposed reading yet; the model seat takes it '
+                           'on an upcoming pass</div>')
+                placeholder = f"or just tell me what '{term}' means here"
+                button = "✓ Confirm meaning"
+                prefill = ""
+            else:
+                out.append('<div class="muted small" style="margin-top:4px">'
+                           'queued — I pursue a few terms per pass and will '
+                           'bring you a proposed reading; you never have to '
+                           'answer these cold</div>')
+                placeholder = f"or skip my queue: what does '{term}' mean here?"
+                button = "✓ Confirm meaning"
+                prefill = ""
             out.append(
                 '<form method="post" action="/confirm-term" '
                 'style="margin-top:8px;display:flex;gap:8px;align-items:center">'
                 f'<input type="hidden" name="term" value="{esc(term)}">'
-                f'<input name="meaning" required placeholder="what \'{esc(term)}\' '
-                'actually means here — your word closes this question" '
-                'style="flex:1;min-width:260px">'
-                '<button class="good">✓ Confirm meaning</button></form>')
+                f'<input name="meaning" required{prefill} '
+                f'placeholder="{esc(placeholder)}" style="flex:1;min-width:260px">'
+                f'<button class="good">{button}</button></form>')
         out.append('</div>')
     if not c["open"]:
         out.append('<div class="panel"><div class="muted small">No open questions — either '
