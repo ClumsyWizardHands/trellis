@@ -764,6 +764,7 @@ def _curiosities_body(led: Ledger) -> str:
     if c["stale_count"]:
         out.append(f'<div class="attn small" style="margin-bottom:10px">⚠ {c["stale_count"]} '
                    'question(s) overdue — surface these before anything else.</div>')
+    from trellis.onboard import term_from_assumption
     for q in c["open"]:
         badge = '<span class="pill hn">overdue</span> ' if q["stale"] else ""
         dry = (f' · <span class="warn small">dry streak {q["dry_streak"]}</span>'
@@ -773,7 +774,20 @@ def _curiosities_body(led: Ledger) -> str:
                    f'<div class="muted small" style="margin-top:4px">assuming: '
                    f'{esc(q["assumption"])}</div>'
                    f'<div class="muted small">would resolve it: {esc(q["what_would_resolve"])}</div>'
-                   f'<div class="muted small">owner: {esc(q["owner"])}{dry}{reask}</div></div>')
+                   f'<div class="muted small">owner: {esc(q["owner"])}{dry}{reask}</div>')
+        # a TERM curiosity can be answered by the human right here — the same
+        # authenticated seat as every other web write; closes at 0.95.
+        term = term_from_assumption(q.get("assumption") or "")
+        if term:
+            out.append(
+                '<form method="post" action="/confirm-term" '
+                'style="margin-top:8px;display:flex;gap:8px;align-items:center">'
+                f'<input type="hidden" name="term" value="{esc(term)}">'
+                f'<input name="meaning" required placeholder="what \'{esc(term)}\' '
+                'actually means here — your word closes this question" '
+                'style="flex:1;min-width:260px">'
+                '<button class="good">✓ Confirm meaning</button></form>')
+        out.append('</div>')
     if not c["open"]:
         out.append('<div class="panel"><div class="muted small">No open questions — either '
                    'nothing\'s puzzling, or the agent hasn\'t contemplated yet today.</div></div>')
@@ -1023,6 +1037,25 @@ def _days_body(led: Ledger) -> str:
 @app.get("/days", response_class=HTMLResponse)
 def days_page(frag: int = 0):
     return _respond("/days", _days_body(_ledger()), bool(frag))
+
+
+@app.post("/confirm-term")
+def confirm_term_post(request: Request, term: str = Form(...),
+                      meaning: str = Form(...)):
+    human = _require_human(request)      # server-verified, not a form field
+    from pathlib import Path as _P
+    from trellis.curiosity import QuestionLog
+    from trellis.memory import Workspace
+    from trellis.onboard import confirm_term_meaning
+    led = _ledger()
+    vp = os.environ.get("TRELLIS_VAULT_PATH", "").strip()
+    root = _P(vp).expanduser() if vp else _P(LEDGER_PATH).parent / "workspace"
+    try:
+        confirm_term_meaning(led, Workspace(root, led), QuestionLog(led),
+                             term, human, meaning, led.ground)
+    except (KeyError, ValueError) as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    return RedirectResponse("/curiosities", status_code=303)
 
 
 @app.post("/day-review")
