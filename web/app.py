@@ -94,6 +94,7 @@ NAV = [
     ("/", "Overview", "the one-screen read: what's live right now"),
     ("/map", "The Map", "what the room decided — and what the agent thinks about it"),
     ("/curiosities", "Assumptions", "where it knows it's assuming, and what it's chasing"),
+    ("/days", "Day walk", "history read one day at a time, newest first — each day checked by you"),
     ("/ingestion", "Ingestion", "what's been taken in and understood — coverage and gaps"),
     ("/sessions", "Sessions", "every conversation on the record — who, where, and what was said"),
     ("/decisions", "Decisions", "every Yes / No / Triangulate — click one to walk its reasoning"),
@@ -320,6 +321,18 @@ def _now_panel(led: Ledger) -> str:
     return "".join(out)
 
 
+def _days_chip(led: Ledger) -> str:
+    """Comprehension-in-time, on the front page: days read as units vs days in
+    the record — the honest 'how much of the past is actually understood'."""
+    try:
+        from trellis.onboard import comprehension
+        c = comprehension(led)
+        return (f'<a class="chip" href="/days" style="text-decoration:none">'
+                f'{c["days_digested"]}/{c["days_total"]} days walked</a>')
+    except Exception:
+        return ""
+
+
 def _overview_body(led: Ledger) -> str:
     stats = views.growth_stats(led)
     gs = GlyphStats.from_growth(stats)
@@ -345,7 +358,8 @@ def _overview_body(led: Ledger) -> str:
                f'<span class="chip">{stats["decisions"]} decisions</span>'
                f'<span class="chip">{stats["memories"]} memories</span>'
                f'<span class="chip">{stats["verified"]}/{stats["checked"]} verified</span>'
-               f'<span class="chip">{stats["age_days"]:.0f}d on the record</span></div>')
+               f'<span class="chip">{stats["age_days"]:.0f}d on the record</span>'
+               f'{_days_chip(led)}</div>')
     # attention rail
     if openq:
         out.append('<div class="legend"><b class="attn">Needs attention.</b> Unresolved '
@@ -375,8 +389,10 @@ def _overview_body(led: Ledger) -> str:
             f'<div class="row"><div><span class="pill hn">day check</span> '
             f'my reading of <b>{esc(pd)}</b> awaits your Y/N/T '
             f'<div class="muted small">“{esc(str(b.get("summary",""))[:140])}”</div>'
-            f'<div class="muted small">answer in a terminal: <code>trellis day '
-            f'{esc(pd)} yes|no|triangulate "note"</code></div></div></div>')
+            f'<div class="muted small"><a class="good" href="/days">answer with '
+            f'the Y/N/T buttons on the Day-walk page →</a> or in a terminal: '
+            f'<code>trellis day {esc(pd)} yes|no|triangulate "note"</code>'
+            f'</div></div></div>')
     out.append('</div>')
 
     # loops + recent story
@@ -941,6 +957,84 @@ def logout():
     resp = RedirectResponse("/login", status_code=303)
     resp.delete_cookie(SESSION_COOKIE)
     return resp
+
+
+def _days_body(led: Ledger) -> str:
+    """The day-walk as a visible timeline (D53/D54): newest first, each day's
+    reading with its state — and the pending day's Y/N/T as BUTTONS, the same
+    authenticated seat the other web writes use."""
+    from trellis.onboard import (DAY_DIGEST_KIND, day_review_state,
+                                 pending_review_day)
+    out = [_pagehead("Day walk",
+                     "comprehension walks backward through time, one checkable "
+                     "day at a time — the panel refutes first, then you check")]
+    digests = [e for e in led.active(DAY_DIGEST_KIND) if e.body.get("day")]
+    digests.sort(key=lambda e: e.body["day"], reverse=True)
+    if not digests:
+        out.append('<div class="panel"><div class="muted">no days read yet — '
+                   'the walk begins with the newest day of the record.</div></div>')
+        return "".join(out)
+
+    comp_days = {e.body["day"] for e in digests}
+    pd = pending_review_day(led)
+    state_pill = {
+        "approved": ('good', '✓ approved by you'),
+        "pending": ('hn', '⏸ awaiting your Y/N/T'),
+        "rejected": ('hn', '↻ re-reading (you said no — reason withheld)'),
+        "triangulating": ('hn', '↻ re-reading with your note'),
+        "refuted_by_panel": ('hn', '✗ panel refuted — machine re-read queued'),
+    }
+    out.append(f'<div class="legend">{len(comp_days)} day(s) read as units · '
+               'newest first · a day advances only past the panel AND your check</div>')
+    for e in digests:
+        b = e.body
+        day = b["day"]
+        state = day_review_state(led, day)
+        cls, label = state_pill.get(state, ('good', state))
+        out.append('<div class="panel">')
+        out.append(f'<h3>{esc(day)} <span class="pill {cls}">{esc(label)}</span> '
+                   f'<span class="muted small">confidence {b.get("confidence")} · '
+                   f'{b.get("items", 0)} item(s) · rework {b.get("rework", 0)}</span></h3>')
+        out.append(f'<div>{esc(b.get("summary") or "(counts only — no model reading)")}</div>')
+        if b.get("notable"):
+            out.append('<div class="small" style="margin-top:6px"><b>notable:</b> '
+                       + " · ".join(esc(n) for n in b["notable"]) + '</div>')
+        if b.get("unclear"):
+            out.append('<div class="small muted" style="margin-top:4px"><b>unclear:</b> '
+                       + " · ".join(esc(u) for u in b["unclear"]) + '</div>')
+        if b.get("human_note"):
+            out.append(f'<div class="small" style="margin-top:4px"><b>your note:</b> '
+                       f'{esc(b["human_note"])}</div>')
+        if day == pd:
+            out.append(
+                '<form method="post" action="/day-review" '
+                'style="margin-top:10px;display:flex;gap:8px;align-items:center;flex-wrap:wrap">'
+                f'<input type="hidden" name="day" value="{esc(day)}">'
+                '<button name="verdict" value="yes" class="good">✓ Yes — walk on</button>'
+                '<button name="verdict" value="no">✗ No — look again (I won\'t say why)</button>'
+                '<button name="verdict" value="triangulate">△ Triangulate with note →</button>'
+                '<input name="note" placeholder="clarifying note (rides the re-read on T; '
+                'recorded but withheld on N)" style="flex:1;min-width:240px">'
+                '</form>')
+        out.append('</div>')
+    return "".join(out)
+
+
+@app.get("/days", response_class=HTMLResponse)
+def days_page(frag: int = 0):
+    return _respond("/days", _days_body(_ledger()), bool(frag))
+
+
+@app.post("/day-review")
+def day_review_post(request: Request, day: str = Form(...),
+                    verdict: str = Form(...), note: str = Form("")):
+    human = _require_human(request)      # server-verified, not a form field
+    from trellis.onboard import review_day
+    try:
+        review_day(_ledger(), day, verdict, human, note)
+    except (KeyError, ValueError) as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    return RedirectResponse("/days", status_code=303)
 
 
 @app.post("/affirm")
