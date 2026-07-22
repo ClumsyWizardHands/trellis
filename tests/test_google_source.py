@@ -162,6 +162,23 @@ def test_drive_items_ride_the_idempotent_spine(tmp_path, ground):
     assert "the empire, lowercase on purpose" not in live
 
 
+def test_known_unchanged_files_skip_the_content_download(tmp_path):
+    """The 68-minute-stall follow-up: an unchanged file (same id + same
+    modifiedTime as already ingested) must not be re-downloaded — the listing
+    alone settles it. A CHANGED file still fetches."""
+    from trellis.clock import parse_iso
+    drive = _drive()
+    adapter = GoogleDriveAdapter(folder_id=FOLDER, service=drive)
+    adapter.known = {
+        "doc-1": parse_iso("2026-07-01T10:00:00+00:00"),   # unchanged → skip
+        "doc-2": parse_iso("2026-01-01T00:00:00+00:00"),   # older → changed → fetch
+    }
+    items = {i.item_id for i in adapter.discover()}
+    assert "doc-1" not in items                    # not yielded…
+    assert adapter.skipped_unchanged == 1          # …and counted honestly
+    assert "doc-2" in items and "txt-1" in items   # changed + new still flow
+
+
 def test_unreadable_file_is_counted_not_fatal(tmp_path):
     drive = _drive()
     drive._files.exports["doc-1"] = RuntimeError("export exploded")

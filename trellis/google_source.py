@@ -175,6 +175,11 @@ class GoogleDriveAdapter:
         self._service = service
         self.page_size = page_size
         self.skipped: list[str] = []     # names we could not read, per scan
+        # {file_id: modifiedTime datetime} the caller already holds — an
+        # UNCHANGED file's content is not re-downloaded (it would only be
+        # hashed and skipped by the spine anyway). ~1,000 exports/pass saved.
+        self.known: dict = {}
+        self.skipped_unchanged: int = 0
 
     def _drive(self):
         if self._service is not None:
@@ -190,8 +195,19 @@ class GoogleDriveAdapter:
                 "TRELLIS_GOOGLE_TOKEN_STORE is unset — where should Google's "
                 "client keep the token the human grants?")
         creds = _load_credentials(self.token_store)
-        self._service = build("drive", "v3", credentials=creds,
-                              cache_discovery=False)
+        # a BOUNDED transport: without an explicit timeout the Google client
+        # blocks FOREVER on a wedged connection — which froze the resident for
+        # 68 silent minutes on 2026-07-22. A hung call must become a loud,
+        # per-file skip, never an infinite stall.
+        try:
+            import httplib2
+            from google_auth_httplib2 import AuthorizedHttp
+            authed = AuthorizedHttp(creds, http=httplib2.Http(timeout=60))
+            self._service = build("drive", "v3", http=authed,
+                                  cache_discovery=False)
+        except ImportError:
+            self._service = build("drive", "v3", credentials=creds,
+                                  cache_discovery=False)
         return self._service
 
     # ----- discovery ---------------------------------------------------------
@@ -207,6 +223,7 @@ class GoogleDriveAdapter:
                 "inert, not omnivorous)")
         drive = self._drive()
         self.skipped = []
+        self.skipped_unchanged = 0
         page_token = None
         while True:
             resp = drive.files().list(
@@ -235,6 +252,15 @@ class GoogleDriveAdapter:
         fid = str(f.get("id", "") or "")
         name = str(f.get("name", "") or "(untitled)")
         mime = str(f.get("mimeType", "") or "")
+        # unchanged-since-last-ingest? skip the content download entirely —
+        # the metadata listing already proves there is nothing new to read.
+        if fid in self.known:
+            try:
+                if parse_iso(str(f.get("modifiedTime"))) == self.known[fid]:
+                    self.skipped_unchanged += 1
+                    return None
+            except (TypeError, ValueError):
+                pass                     # unparseable time → fetch, be safe
         try:
             if mime == _GOOGLE_DOC:
                 raw = drive.files().export(

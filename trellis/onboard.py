@@ -1385,6 +1385,15 @@ class OnboardingRitual:
         `docs_per_pass` NEW items, newest event_time first. Returns
         (batch, already_known_count, deferred_count) — the deferral is
         REPORTED, never silent (no silent caps)."""
+        if hasattr(adapter, "known") and getattr(adapter, "folder_id", ""):
+            # give the Drive adapter what we already hold, so an unchanged
+            # file's content is never re-downloaded (its modifiedTime IS the
+            # stored event_time — the listing alone proves nothing changed).
+            adapter.known = {
+                e.body.get("item_id"): e.stamp.event_time
+                for e in self.ledger.active(SOURCE_DOCUMENT_KIND)
+                if e.body.get("source") == "gdrive"
+                and e.body.get("channel") == adapter.folder_id}
         items = sorted(adapter.discover(),
                        key=lambda i: i.event_time, reverse=True)
         markers = ing._markers()
