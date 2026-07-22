@@ -336,10 +336,15 @@ class TermLineage:
     case_variants: dict = field(default_factory=dict)      # exact casing → count
 
     def to_body(self) -> dict:
+        # voices/channels are BOUNDED here (a term used across hundreds of
+        # documents must not bloat every superseding observation entry); the
+        # totals stay honest so nothing reads as complete when it is a sample.
         return {"term": self.term, "occurrences": self.occurrences,
                 "entry_ids": list(self.entry_ids), "first_use": self.first_use,
-                "latest_use": self.latest_use, "users": list(self.users),
-                "channels": list(self.channels),
+                "latest_use": self.latest_use,
+                "users": list(self.users[:50]), "users_total": len(self.users),
+                "channels": list(self.channels[:50]),
+                "channels_total": len(self.channels),
                 "case_variants": dict(self.case_variants)}
 
 
@@ -545,8 +550,12 @@ def _write_term_note(workspace: Workspace, obs: Entry, lineage: TermLineage,
     if lineage.latest_use and lineage.latest_use is not lineage.first_use:
         l = lineage.latest_use
         lines.append(f"- most recent: {l['when']} · {l['author']} · {l['where']} — “{l['excerpt']}”")
-    lines.append(f"- {lineage.occurrences} use(s) by {', '.join(lineage.users) or '—'} "
-                 f"in {', '.join(lineage.channels) or '—'}")
+    def _bounded(names: list, cap: int = 8) -> str:
+        shown = ", ".join(names[:cap]) or "—"
+        extra = len(names) - cap
+        return shown + (f" … and {extra} more" if extra > 0 else "")
+    lines.append(f"- {lineage.occurrences} use(s) by {_bounded(lineage.users)} "
+                 f"in {_bounded(lineage.channels)}")
     if len(lineage.case_variants) > 1:
         variants = ", ".join(f"{k}×{v}" for k, v in sorted(lineage.case_variants.items()))
         lines.append(f"- casing varies ({variants}) — possibly deliberate; not yet settled")

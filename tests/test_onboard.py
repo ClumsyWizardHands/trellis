@@ -206,6 +206,27 @@ def test_lineage_matches_phrases_case_insensitively(ledger, ground):
     assert set(lin.case_variants) == {"Overnight Soak", "overnight soak"}
 
 
+def test_lineage_over_many_documents_stays_bounded(ledger, tmp_path, ground):
+    """A term used across hundreds of documents must not bloat the observation
+    entry or turn the map note into a wall of filenames (found in the live
+    rehearsal: 'empire' across 500+ transcripts made a 41KB note)."""
+    many = [(f"doc-author-{i}", [f"the empire memo number {i}"])
+            for i in range(80)]
+    _seed_messages(ledger, many)
+    lin = term_lineage(ledger, "empire")
+    body = lin.to_body()
+    assert len(body["users"]) == 50 and body["users_total"] == 80   # bounded, honest
+    assert len(body["entry_ids"]) == 50                             # evidence capped
+
+    ws = Workspace(tmp_path / "ws", ledger)
+    qlog = QuestionLog(ledger, ground)
+    record_term_observation(ledger, ws, qlog, "empire", lin,
+                            author="trellis-onboard", ground=ground)
+    note = ws.read("map/terms/empire.md")
+    assert "and 72 more" in note                     # 8 shown, the rest counted
+    assert len(note) < 4000                          # a readable note, not a dump
+
+
 # --------------------------------------------------------------------------- #
 # 4. the meaning discipline — verified or human-confirmed, never assumed       #
 # --------------------------------------------------------------------------- #
