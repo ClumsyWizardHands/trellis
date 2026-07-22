@@ -55,11 +55,13 @@ def _day_json(summary="the team discussed the empire", conf=0.9):
 
 
 def _ritual(ledger, tmp_path, ground, provider=None, days_per_pass=2):
+    # day_gate=False here: these tests pin the UNGATED walk (D53); the gate
+    # itself (D54) is pinned in tests/test_d54_day_gate.py.
     record_consent(ledger, "alex", True)
     return OnboardingRitual(ledger, Workspace(tmp_path / "ws", ledger),
                             ground=ground, provider=provider,
                             registry=IdentityRegistry(ledger), seed_terms=[],
-                            days_per_pass=days_per_pass)
+                            days_per_pass=days_per_pass, day_gate=False)
 
 
 def test_days_digest_newest_first_and_fold(ledger, tmp_path, ground):

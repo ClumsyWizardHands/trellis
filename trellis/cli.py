@@ -881,7 +881,9 @@ def _build_onboarding(ledger, iso, registry, seed_terms):
                               seed_terms=seed_terms,
                               outbox=outbox, checkin_target=checkin_target,
                               docs_per_pass=_int_env("TRELLIS_DOCS_PER_PASS", 150),
-                              days_per_pass=_int_env("TRELLIS_DAYS_PER_PASS", 2))
+                              days_per_pass=_int_env("TRELLIS_DAYS_PER_PASS", 2),
+                              day_gate=os.environ.get("TRELLIS_DAY_GATE", "on")
+                                       .strip().lower() not in ("off", "0", "false"))
     return ritual, sources, backfill, client, iso, surfaces, notes
 
 
@@ -905,6 +907,10 @@ def _print_pass_summary(summary: dict) -> None:
         print(f"  curious about: {', '.join(minted)}")
     for d in summary.get("days_digested", []):
         print(f"  📅 read {d} as a unit — see map/days/{d}.md")
+    if summary.get("awaiting_day_review"):
+        day = summary["awaiting_day_review"]
+        print(f"  ⏸ the day-walk is WAITING ON YOU — check {day} with: "
+              f"trellis day {day} yes|no|triangulate")
     for p in summary.get("terms_pursued", []):
         print(f"  · '{p['term']}' — {p['outcome']}")
     for t in summary.get("presence_questions", []):
@@ -1049,6 +1055,64 @@ def cmd_confirm(args: argparse.Namespace) -> int:
     return 0
 
 
+# ---------- day (the human's Y/N/T check on the day-walk, D54) ----------
+
+
+def cmd_day(args: argparse.Namespace) -> int:
+    """`trellis day` shows the day waiting on your check; `trellis day
+    2026-07-21 yes|no|triangulate [note…]` answers it."""
+    config.load_dotenv()
+    from .ledger import Ledger
+    from .onboard import (day_review_state, latest_day_digest,
+                          pending_review_day, review_day)
+    ledger = Ledger(config.ledger_path())
+
+    if not args.day:
+        pd = pending_review_day(ledger)
+        if not pd:
+            print("no day is waiting on your check — the walk is walking.")
+            return 0
+        d = latest_day_digest(ledger, pd)
+        b = d.body
+        print(f"⏸ waiting on you: my reading of {pd} "
+              f"(confidence {b.get('confidence')})\n")
+        print("WHAT HAPPENED:\n  " + (b.get("summary") or "(counts only)"))
+        for label, key in (("NOTABLE", "notable"), ("UNCLEAR", "unclear")):
+            if b.get(key):
+                print(f"{label}:")
+                for x in b[key]:
+                    print(f"  - {x}")
+        print(f"\nanswer:  trellis day {pd} yes           (correct — walk on)"
+              f"\n         trellis day {pd} no            (look again; I won't say why)"
+              f"\n         trellis day {pd} triangulate \"your clarifying note\"")
+        return 0
+
+    if not args.verdict:
+        state = day_review_state(ledger, args.day)
+        print(f"{args.day}: {state}")
+        return 0
+
+    human = os.environ.get("TRELLIS_HUMAN", "operator").strip() or "operator"
+    note = " ".join(args.note or [])
+    try:
+        review_day(ledger, args.day, args.verdict, human, note)
+    except (KeyError, ValueError) as e:
+        print(f"✗ {e}", file=sys.stderr)
+        return 1
+    v = args.verdict.strip().lower()
+    if v in ("y", "yes"):
+        print(f"✓ {args.day} approved — the walk advances to the next day "
+              "on the coming pass.")
+    elif v in ("n", "no"):
+        print(f"✓ noted: NO on {args.day}. It will re-read that day on its "
+              "own — your reason deliberately not passed along.")
+    else:
+        print(f"✓ noted: TRIANGULATE on {args.day}. Your note will steer "
+              "the re-read." + ("" if note else " (no note given — consider "
+              "adding one next time; a bare T steers nothing)"))
+    return 0
+
+
 # ---------- google (the human's one-time browser grant) ----------
 
 
@@ -1124,12 +1188,19 @@ def main(argv=None) -> int:
                                        "(closes its curiosity at human confidence)")
     c.add_argument("term", help="the term, e.g. \"empire\"")
     c.add_argument("meaning", help="what it means here, in your words")
+    dy = sub.add_parser("day", help="the Y/N/T check on the day-walk "
+                                    "(no args = show the day waiting on you)")
+    dy.add_argument("day", nargs="?", help="YYYY-MM-DD")
+    dy.add_argument("verdict", nargs="?",
+                    help="yes (walk on) | no (re-read blind) | triangulate")
+    dy.add_argument("note", nargs="*", help="clarifying note (for triangulate)")
 
     args = ap.parse_args(argv)
     return {"init": cmd_init, "doctor": cmd_doctor, "demo": cmd_demo,
             "tick": cmd_tick, "run": cmd_run, "web": cmd_web,
             "discord": cmd_discord, "begin": cmd_begin, "onboard": cmd_begin,
-            "google": cmd_google, "confirm": cmd_confirm}[args.cmd](args)
+            "google": cmd_google, "confirm": cmd_confirm,
+            "day": cmd_day}[args.cmd](args)
 
 
 if __name__ == "__main__":  # pragma: no cover

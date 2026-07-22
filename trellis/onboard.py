@@ -55,6 +55,7 @@ from .verify import (CompletionClaim, Evidence, EvidenceKind, VerdictStatus,
 CONSENT_KIND = "onboard_consent"
 STAGE_KIND = "onboard_stage"
 DAY_DIGEST_KIND = "day_digest"
+DAY_REVIEW_KIND = "day_review"
 INTRO_KIND = "onboard_introduction"
 PASS_KIND = "onboard_pass"
 TERM_OBSERVATION_KIND = "term_observation"
@@ -866,6 +867,79 @@ def write_map_overview(ledger: Ledger, workspace: Workspace, registry,
 
 
 # ---------------------------------------------------------------------------
+# 5b. the day-walk review gate (D54) — Y advance / N re-read / T with a note
+# ---------------------------------------------------------------------------
+
+
+def latest_day_digest(ledger: Ledger, day: str) -> Optional[Entry]:
+    return next((e for e in ledger.active(DAY_DIGEST_KIND)
+                 if e.body.get("day") == day), None)
+
+
+def _review_for(ledger: Ledger, digest_id: str) -> Optional[Entry]:
+    latest = None
+    for e in ledger.entries():
+        if e.kind == DAY_REVIEW_KIND and e.body.get("digest_id") == digest_id:
+            latest = e
+    return latest
+
+
+def day_review_state(ledger: Ledger, day: str) -> str:
+    """'undigested' | 'pending' (awaiting the human) | 'approved' |
+    'rejected' (N — re-read blind) | 'triangulating' (T — re-read with the
+    human's note) | 'refuted_by_panel' (machine gate fired first)."""
+    d = latest_day_digest(ledger, day)
+    if d is None:
+        return "undigested"
+    if "counts only" in (d.body.get("basis") or ""):
+        return "approved"        # nothing was claimed — nothing to review
+    from .verify import contested_items
+    if any(c["subject_id"] == d.id for c in contested_items(ledger)):
+        return "refuted_by_panel"
+    r = _review_for(ledger, d.id)
+    if r is None:
+        return "pending"
+    return {"Y": "approved", "N": "rejected",
+            "T": "triangulating"}.get(r.body.get("verdict"), "pending")
+
+
+def pending_review_day(ledger: Ledger) -> Optional[str]:
+    """The newest day sitting at the human gate, or None."""
+    days = sorted({e.body.get("day") for e in ledger.active(DAY_DIGEST_KIND)
+                   if e.body.get("day")}, reverse=True)
+    for day in days:
+        if day_review_state(ledger, day) == "pending":
+            return day
+    return None
+
+
+_VERDICT_WORDS = {"y": "Y", "yes": "Y", "n": "N", "no": "N",
+                  "t": "T", "triangulate": "T"}
+
+
+def review_day(ledger: Ledger, day: str, verdict: str, human: str,
+               note: str = "") -> Entry:
+    """The human's check on one day's reading (D54). Y = correct, walk on.
+    N = look again — deliberately WITHOUT saying why (sometimes the agent
+    should figure it out on its own). T = close, but there's more depth: the
+    human's note rides the re-read as trusted clarification."""
+    human = require_identity(human, "reviewing human")
+    v = _VERDICT_WORDS.get((verdict or "").strip().lower())
+    if v is None:
+        raise ValueError(f"verdict must be yes/no/triangulate, got {verdict!r}")
+    d = latest_day_digest(ledger, day)
+    if d is None:
+        raise KeyError(f"no digest for day {day} — nothing to review yet")
+    if "counts only" in (d.body.get("basis") or ""):
+        raise ValueError(f"day {day} has only a counts digest (no model "
+                         "reading) — there is no claim to review")
+    return ledger.append(
+        kind=DAY_REVIEW_KIND, author=human,
+        body={"day": day, "digest_id": d.id, "verdict": v, "note": note},
+        tags=("onboard", "day-review", v, day))
+
+
+# ---------------------------------------------------------------------------
 # 6. the ritual — one coordinated, bounded, resumable learning pass
 # ---------------------------------------------------------------------------
 
@@ -882,7 +956,8 @@ class OnboardingRitual:
                  seed_terms: Optional[List[str]] = None,
                  scout: Optional[TermScout] = None,
                  outbox=None, checkin_target: str = "",
-                 docs_per_pass: int = 150, days_per_pass: int = 2):
+                 docs_per_pass: int = 150, days_per_pass: int = 2,
+                 day_gate: bool = True):
         self.ledger = ledger
         self.workspace = workspace
         self.ground = ground or ledger.ground
@@ -906,6 +981,9 @@ class OnboardingRitual:
         # D53: how many not-yet-digested DAYS each pass reads as units,
         # newest first — comprehension walks backward through time.
         self.days_per_pass = max(0, int(days_per_pass))
+        # D54: the human gate on the day-walk — one day at a time, each
+        # awaiting the human's Y/N/T before the walk advances.
+        self.day_gate = bool(day_gate)
 
     # ----- the pass ----------------------------------------------------------
 
@@ -985,6 +1063,8 @@ class OnboardingRitual:
             # pursuit — the day walk is the comprehension anchor.
             summary["days_digested"] = self._digest_days(self.days_per_pass,
                                                          now)
+            if self.day_gate:
+                summary["awaiting_day_review"] = pending_review_day(self.ledger)
 
             from .verify import contested_items
             contested_before = len(contested_items(self.ledger))
@@ -1027,49 +1107,131 @@ class OnboardingRitual:
         return {e.body.get("day") for e in self.ledger.active(DAY_DIGEST_KIND)}
 
     def _digest_days(self, max_days: int, now=None) -> list:
-        """Read up to `max_days` not-yet-digested days as UNITS, newest first —
-        'let me look at today; what do I need from the day before?' (D53).
-        Each digest is one small, checkable increment: its evidence is ONE
-        day's material, its confidence is capped, its unclear list is explicit
-        — so when the logic goes wrong, you can see WHICH day it went wrong on,
-        instead of auditing an assumption built over a year at once."""
+        """The day-walk (D53 + D54): read days as UNITS, newest first, one
+        checkable increment at a time — gated.
+
+        Order of business each pass:
+          1. REWORK first — any day the human said N (re-read blind), said T
+             (re-read with their note), or the panel refuted (re-read before
+             the human is even bothered).
+          2. THE GATE — if a day is sitting at the human's Y/N/T, do NOT
+             advance; say so, loudly, everywhere.
+          3. Otherwise read the next newest un-digested day — ONE at a time
+             when gated, so 'this is where I'm at, human, give me a check' is
+             the actual rhythm."""
+        if max_days <= 0:
+            return []
         days = self._days_with_material()
-        done = self._digested_days()
-        todo = sorted((d for d in days if d not in done), reverse=True)[:max_days]
         digested = []
+
+        for day, mode, note in self._days_needing_rework()[:max_days]:
+            self._read_day(day, days.get(day, []), mode=mode,
+                           human_note=note, now=now)
+            digested.append(day)
+        if len(digested) >= max_days:
+            return digested
+
+        if self.day_gate and pending_review_day(self.ledger):
+            return digested            # the walk waits on the human's check
+
+        new_cap = 1 if self.day_gate else (max_days - len(digested))
+        todo = sorted((d for d in days
+                       if day_review_state(self.ledger, d) == "undigested"),
+                      reverse=True)[:new_cap]
         for day in todo:
-            entries = sorted(days[day], key=lambda e: e.stamp.event_time)
-            self._stage("digest", f"reading the day {day} as a unit "
-                        f"({len(entries)} item(s))", now)
-            proposed = self._propose_day_digest(day, entries)
-            voices = sorted({e.author for e in entries
-                             if e.kind == "discord_message"})
-            body = {"day": day, "items": len(entries),
-                    "voices": voices[:25], "voices_total": len(voices),
-                    "summary": "", "notable": [], "unclear": [],
-                    "confidence": 0.3,
-                    "basis": "counts only — no model reading yet",
-                    "provenance": _merge_provenance(
-                        self.ledger, [e.id for e in entries[:50]],
-                        self.ground.now()).to_dict()}
-            if proposed:
-                body.update(summary=proposed["summary"],
-                            notable=proposed["notable"],
-                            unclear=proposed["unclear"],
-                            confidence=round(min(MODEL_MEANING_CONFIDENCE_CAP,
-                                                 proposed["confidence"]), 3),
-                            basis="model reading of this one day; unconfirmed")
-            prior = next((e for e in self.ledger.active(DAY_DIGEST_KIND)
-                          if e.body.get("day") == day), None)
-            entry = self.ledger.append(
-                kind=DAY_DIGEST_KIND, author=self.author, body=body,
-                event_time=now, tags=("onboard", "day", day),
-                supersedes=prior.id if prior else None)
-            self._write_day_note(day, body, entry.id)
+            self._read_day(day, days[day], mode="fresh", now=now)
             digested.append(day)
         return digested
 
-    def _propose_day_digest(self, day: str, entries: list) -> Optional[dict]:
+    def _days_needing_rework(self) -> list:
+        """[(day, mode, human_note)] newest first. A panel-refuted day is
+        re-read at most twice on the machine's authority — after that it stays
+        contested for the human (no silent refute→re-read→refute loop)."""
+        out = []
+        for e in self.ledger.active(DAY_DIGEST_KIND):
+            day = e.body.get("day")
+            state = day_review_state(self.ledger, day)
+            if state == "rejected":
+                out.append((day, "N", ""))
+            elif state == "triangulating":
+                r = _review_for(self.ledger, e.id)
+                out.append((day, "T", (r.body.get("note") if r else "") or ""))
+            elif state == "refuted_by_panel" and int(e.body.get("rework", 0)) < 2:
+                out.append((day, "panel", ""))
+        out.sort(reverse=True)
+        return out
+
+    def _read_day(self, day: str, entries: list, mode: str = "fresh",
+                  human_note: str = "", now=None) -> Entry:
+        entries = sorted(entries, key=lambda e: e.stamp.event_time)
+        verb = {"fresh": "reading", "N": "RE-reading (human said no)",
+                "T": "RE-reading with the human's note",
+                "panel": "RE-reading (panel refuted)"}[mode]
+        self._stage("digest", f"{verb} the day {day} as a unit "
+                    f"({len(entries)} item(s))", now)
+        proposed = self._propose_day_digest(day, entries, mode=mode,
+                                            human_note=human_note)
+        voices = sorted({e.author for e in entries
+                         if e.kind == "discord_message"})
+        prior = latest_day_digest(self.ledger, day)
+        rework = int(prior.body.get("rework", 0)) + 1 if (
+            prior is not None and mode != "fresh") else 0
+        basis_by_mode = {
+            "fresh": "model reading of this one day; unconfirmed",
+            "N": "re-read after the human's NO (their reason deliberately "
+                 "withheld — figured out afresh)",
+            "T": "re-read WITH the human's triangulation note folded in",
+            "panel": "re-read after the independent panel refuted the prior reading",
+        }
+        # a T re-read carries the human's steer, so it may sit a little higher
+        # than an unconfirmed model reading — but it is still a model reading.
+        cap = 0.8 if mode == "T" else MODEL_MEANING_CONFIDENCE_CAP
+        body = {"day": day, "items": len(entries),
+                "voices": voices[:25], "voices_total": len(voices),
+                "summary": "", "notable": [], "unclear": [],
+                "confidence": 0.3,
+                "basis": "counts only — no model reading yet",
+                "rework": rework,
+                "human_note": human_note or None,
+                "provenance": _merge_provenance(
+                    self.ledger, [e.id for e in entries[:50]],
+                    self.ground.now()).to_dict()}
+        if proposed:
+            body.update(summary=proposed["summary"],
+                        notable=proposed["notable"],
+                        unclear=proposed["unclear"],
+                        confidence=round(min(cap, proposed["confidence"]), 3),
+                        basis=basis_by_mode[mode])
+        entry = self.ledger.append(
+            kind=DAY_DIGEST_KIND, author=self.author, body=body,
+            event_time=now, tags=("onboard", "day", day),
+            supersedes=prior.id if prior else None)
+        self._write_day_note(day, body, entry.id)
+        # D34 broad verification, D54 layer one: the refute-by-default panel
+        # checks the reading BEFORE the human is asked to. A refutation marks
+        # it contested (escalated on the portal) and triggers a machine re-read.
+        if proposed and self.verifier is not None:
+            claim = CompletionClaim(
+                maker=self.author,
+                task=f"read the day {day} as a unit from its own items",
+                summary=body["summary"][:300],
+                evidence=[Evidence(EvidenceKind.LEDGER, entry.id,
+                                   expect_kind=DAY_DIGEST_KIND,
+                                   expect_contains=day)])
+            try:
+                convene_verification(self.ledger, claim, self.verifier,
+                                     subject_id=entry.id,
+                                     subject_kind=DAY_DIGEST_KIND)
+            except Exception as e:
+                self.ledger.append(
+                    "verification_error", self.author,
+                    {"subject_id": entry.id, "task": f"day {day}",
+                     "status": "error", "error": repr(e)},
+                    tags=("verify", "error", self.author))
+        return entry
+
+    def _propose_day_digest(self, day: str, entries: list, mode: str = "fresh",
+                            human_note: str = "") -> Optional[dict]:
         if self.provider is None:
             return None
         rows = entries[-30:]              # bounded; the newest of a huge day
@@ -1079,9 +1241,24 @@ class OnboardingRitual:
                    else f"(document) {str(e.body.get('title', '?'))[:40]}")
             lines.append(f"[{e.stamp.event_time.strftime('%H:%M')} {who}] "
                          f"{str(e.body.get('content', ''))[:160]}")
+        steer = ""
+        if mode == "N":
+            steer = ("\n\nA human reviewed a previous reading of this day and "
+                     "answered NO — it was not right. They deliberately did "
+                     "not say why. Read the day again from scratch, more "
+                     "carefully; look for what a first reading would miss.")
+        elif mode == "T":
+            steer = ("\n\nA human reviewed a previous reading and answered "
+                     "TRIANGULATE — close, but there is more depth. Their "
+                     f"clarifying note (trusted): {human_note or '(none given)'}"
+                     "\nFold it in and read the day again.")
+        elif mode == "panel":
+            steer = ("\n\nAn independent verification panel REFUTED the "
+                     "previous reading of this day. Read it again from "
+                     "scratch; claim less if the items support less.")
         user = (f"The day: {day} ({len(entries)} item(s); showing "
                 f"{len(rows)}).\n" + fence_untrusted("\n".join(lines))
-                + "\n\nWhat happened THIS day? JSON only.")
+                + steer + "\n\nWhat happened THIS day? JSON only.")
         try:
             resp = self.provider.complete(system=self._DAY_SYSTEM,
                                           messages=[{"role": "user",
@@ -1209,6 +1386,13 @@ class OnboardingRitual:
         if summary.get("days_digested"):
             lines.append("\n## Days walked this pass (newest first)")
             lines += [f"- [{d}](days/{d}.md)" for d in summary["days_digested"]]
+        if summary.get("awaiting_day_review"):
+            day = summary["awaiting_day_review"]
+            lines.append(f"\n## ⏸ The day-walk is WAITING ON YOU")
+            lines.append(f"- my reading of **{day}** needs your check: "
+                         f"`trellis day {day} yes` to walk on, `no` to make me "
+                         "look again (I won't be told why), or "
+                         f"`triangulate \"your note\"` to steer my re-read")
         lines.append("\n## Where understanding actually stands")
         lines.append(f"- walked {comp.get('walked', 0)} of "
                      f"{comp.get('ingested', 0)} ingested items "

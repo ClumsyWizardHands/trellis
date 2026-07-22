@@ -1127,6 +1127,46 @@ instead) — panel verification of digests is a named follow-up.
 
 ---
 
+## D54 — The day-walk is human-checked: Y advance / N re-read blind / T with a note ✅ fresh
+
+**Decision:** each day's reading passes TWO gates before the walk advances. First the
+**machine gate**: the refute-by-default Haiku panel checks every model-read day digest
+(D34 broad verification); a REFUTED reading is contested, escalated, and re-read on the
+machine's own authority (at most twice — then it stays contested for the human; no
+silent refute→re-read loop). Then the **human gate**: the reading waits for the owner's
+**Y/N/T** (`trellis day <day> yes|no|triangulate ["note"]`): **Y** — correct, the walk
+advances to the next-older day; **N** — look again, with the human's reason
+**deliberately withheld** from the re-read prompt (sometimes the agent should figure it
+out on its own); **T** — close but shallower than the truth: the human's clarifying
+note rides the re-read as trusted steer, and the T-informed reading may sit at 0.8
+(still capped — a human-steered model reading is not a human-confirmed fact). One new
+day at a time while gated; a counts-only digest (no model seat) claims nothing and
+never gates. `TRELLIS_DAY_GATE=off` releases the walk for unattended runs.
+
+**Triangulation:**
+1. Alex, 2026-07-22: "there should be a human check after each day… If it's a no, it
+   needs to look again. If it's a triangulate, the human writes clarifying notes…
+   Sometimes I want the agent to figure it out on its own with a no. … You start with
+   one day. 'This is where I'm at. Human, give me a check.'" — ratified knowingly
+   against the start-stop cost ("I want to do this even though I dislike the
+   start-stop").
+2. Tension with D33 (don't over-gate the agent's reasoning), held deliberately: the
+   gate is on the WALK'S ADVANCE, not on the agent's thinking — passes keep ingesting,
+   tracing terms, and reworking rejected days while a day waits; the panel screens
+   before the human; N re-reads are the agent's own reasoning by design; and the gate
+   is a config, not doctrine, for when trust has compounded.
+3. The Y/N/T grammar is D1's, applied to comprehension itself — the check is a
+   recorded, attributed `day_review` entry, so the human's verdicts compound on the
+   record like every other judgment.
+
+**Consequence:** `onboard.review_day` / `day_review_state` / `pending_review_day`
+(+ `day_review` ledger kind), the gated `_digest_days` (rework → gate → one new day),
+mode-steered re-read prompts, panel verification of day digests, `trellis day` CLI,
+the waiting state surfaced in check-ins, the pass print, and the portal's
+"Waiting on you" panel.
+
+---
+
 ## ⏳ Watch list (decisions deliberately NOT taken)
 
 - **W1 — No skill marketplace / no auto-installed skills.** [OPENCLAW] supply-chain

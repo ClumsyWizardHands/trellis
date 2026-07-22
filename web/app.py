@@ -363,6 +363,20 @@ def _overview_body(led: Ledger) -> str:
     # inbox
     out.append('<div class="panel"><h3>Waiting on you · nothing sends without your yes</h3>')
     out.append(_inbox_rows(inbox))
+    # D54: the day-walk's human gate is a first-class "waiting on you"
+    try:
+        from trellis.onboard import latest_day_digest, pending_review_day
+        pd = pending_review_day(led)
+    except Exception:
+        pd = None
+    if pd:
+        b = (latest_day_digest(led, pd) or type("E", (), {"body": {}})).body
+        out.append(
+            f'<div class="row"><div><span class="pill hn">day check</span> '
+            f'my reading of <b>{esc(pd)}</b> awaits your Y/N/T '
+            f'<div class="muted small">“{esc(str(b.get("summary",""))[:140])}”</div>'
+            f'<div class="muted small">answer in a terminal: <code>trellis day '
+            f'{esc(pd)} yes|no|triangulate "note"</code></div></div></div>')
     out.append('</div>')
 
     # loops + recent story
