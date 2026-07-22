@@ -228,6 +228,83 @@ def _pagehead(title: str, subtitle: str) -> str:
 
 # ---- page bodies (pure-ish: ledger in, HTML out) ---------------------------
 
+#: write-activity → a human stage label. The overview's "Latest activity" feed
+#: sorts by EVENT time (history), so during a backfill it shows the past being
+#: read, not the work being done — this panel is the WRITE-time view: what the
+#: agent's hands are doing this second.
+_STAGES = {
+    "ingest_marker":       ("SWALLOWING", "bulk-reading the record — documents and history go in first; understanding comes after, and takes many sessions"),
+    "source_document":     ("SWALLOWING", "reading documents into the ledger, one attributed entry each"),
+    "discord_message":     ("SWALLOWING", "ingesting Discord history, oldest first"),
+    "discord_poll_cursor": ("SWALLOWING", "checkpointing its place in the history (a restart resumes here)"),
+    "discord_backfill":    ("SWALLOWING", "backfilling Discord history in bounded chunks"),
+    "question":            ("WONDERING", "minting curiosity nodes — terms and people it refuses to assume"),
+    "seek":                ("TRACING", "pursuing an open question through the record"),
+    "term_observation":    ("TRACING", "recording a traced understanding, with provenance and capped confidence"),
+    "verification":        ("VERIFYING", "an independent seat is judging a claim — the maker never grades its own work"),
+    "panel_verdict":       ("VERIFYING", "the Haiku panel is voting, refute-by-default"),
+    "memory_write":        ("MAPPING", "writing the navigable map beside the record"),
+    "onboard_pass":        ("RESTING", "learning pass recorded — the next one runs on the half-hour"),
+    "context_manifest":    ("THINKING", "compiling the context packet a model will reason over"),
+}
+
+
+def _describe_event(e) -> str:
+    b = e.body
+    k = e.kind
+    if k == "discord_message":
+        return f"{e.author} in #{b.get('channel_name') or b.get('channel','?')}: “{str(b.get('content',''))[:60]}”"
+    if k == "source_document":
+        return f"read “{str(b.get('title','?'))[:70]}” ({b.get('source','?')})"
+    if k == "ingest_marker":
+        return f"{b.get('phase','?')} ingesting {b.get('source','?')} item"
+    if k == "question":
+        return f"now curious: {str(b.get('title','?'))[:70]}"
+    if k == "seek":
+        return f"pursued: {str(b.get('searched','?'))[:70]}"
+    if k == "term_observation":
+        return f"traced the term “{b.get('term','?')}” (confidence {b.get('confidence')})"
+    if k in ("verification", "panel_verdict"):
+        return f"{e.author} → {b.get('status','?')} on {str(b.get('task') or b.get('claim_id') or '?')[:50]}"
+    if k == "memory_write":
+        return f"wrote {b.get('path','?')}"
+    if k == "onboard_pass":
+        return f"pass: {b.get('status','?')} · {len(b.get('terms_pursued') or [])} term(s) pursued"
+    if k == "discord_poll_cursor":
+        return f"checkpointed #{str(b.get('channel','?'))[:24]}"
+    return k.replace("_", " ")
+
+
+def _now_panel(led: Ledger) -> str:
+    entries = led.entries()
+    now = led.ground.now()
+    recent = [x for x in entries[-120:]
+              if (now - x.stamp.write_time).total_seconds() <= 90]
+    if recent:
+        from collections import Counter
+        dominant = Counter(x.kind for x in recent).most_common(1)[0][0]
+        stage, phrase = _STAGES.get(dominant, ("WORKING", f"writing {dominant} entries"))
+        sub = f"{esc(phrase)} · <b>{len(recent)}</b> ledger writes in the last 90s"
+    elif entries:
+        age = int((now - entries[-1].stamp.write_time).total_seconds())
+        stage = "QUIET"
+        sub = (f"nothing being written right now — last activity {age}s ago; "
+               "the learning pass runs on its cadence, and quiet is honest, not stuck")
+    else:
+        stage, sub = "EMPTY", "no record yet — run <code>trellis begin</code>"
+    out = ['<div class="panel"><h3>Right now — what the agent is actually doing</h3>',
+           f'<div class="legend"><span class="pill hn">{esc(stage)}</span> {sub}</div>',
+           '<ul class="feed">']
+    for e in entries[-10:][::-1]:
+        ago = max(0, int((now - e.stamp.write_time).total_seconds()))
+        out.append(f'<li><span class="muted small" style="min-width:58px">{ago}s ago</span>'
+                   f'<span>{esc(_describe_event(e))}</span></li>')
+    out.append('</ul><div class="muted small">write-time view: this is the work being '
+               'done this second — the “Latest activity” feed below is the history '
+               'being read (event time), which is why it can look old.</div></div>')
+    return "".join(out)
+
+
 def _overview_body(led: Ledger) -> str:
     stats = views.growth_stats(led)
     gs = GlyphStats.from_growth(stats)
@@ -236,6 +313,11 @@ def _overview_body(led: Ledger) -> str:
     loops = views.loop_health(led)
     feed = views.activity_feed(led, limit=8)
     out = [_pagehead("Overview", "What the agent is doing right now, in one screen.")]
+
+    # the live "what am I doing" view — stage + write-time tail (asked for by
+    # Alex, 2026-07-22: "a blank canvas with occasional numbers going up" is
+    # not legibility; the work itself must be visible)
+    out.append(_now_panel(led))
 
     # the self-image, small, links to Reflection
     out.append('<div class="panel"><div class="mirror">')
