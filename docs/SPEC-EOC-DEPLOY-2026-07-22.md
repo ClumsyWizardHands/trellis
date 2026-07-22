@@ -21,7 +21,9 @@ the CLI). Everything else is credentials, human steps, or post-launch.
 - Amended same morning (Clare's updates, 07-22): Alex has already stood the
   trellis bot up in the Alliance of Empires server, and Clare + Sarah hold
   Brett's OAuth via the custody profile and can share it with Alex as the
-  agent's owner. C2, C4, C6, D48, R1, and the runbook reflect both.
+  agent's owner. C2, C4, C6, D48, R1, and the runbook reflect both. A third
+  amendment adds §7: README recentering + the standard/instance split
+  (D49–D50, open to Alex).
 
 ---
 
@@ -239,3 +241,51 @@ the shipped EMP and out of this repo; Clare holds those Ts in the vault.
 (its "NOT DONE / executor not built" header predates the go-live layer). The
 EMP v3 bonfire ratification (due 2026-07-23) supersedes `chief-of-staff-emp.md`
 when it lands.
+
+## 7 · README recentering + the standard ⁄ instance split (Clare, 07-22 — open to Alex)
+
+**The observation, grounded in the file:** the README's hero position — the
+first named section after the intro — is "The agent draws itself" (the glyphs
+and the daily self-portrait), and the portal section names the Reflection page
+as "its heart." The working loop ("the unit of work is a *recorded, checked
+judgment*"), the record, verification, and memory-as-navigation come after or
+mid-page. The self-image is real architecture (a deterministic function of the
+ledger; soul-refusal made visible) and it belongs in the README — it just
+isn't the core value. The core value is the **memory-navigation and checked-
+judgment architecture**: the thing a first reader must come to trust before
+the drawing means anything.
+
+**D49 (proposal) — recenter the README on the working loop and the record.**
+Proposed order for a first reader:
+1. the working loop (sense → resolve → act → verify → remember; the unit of
+   work is a recorded, checked judgment)
+2. the record (the append-only bitemporal ledger; memory-as-navigation —
+   `navigate.py`'s WALK/REOPEN/DECIDE; the context compiler that reloads the
+   prior read before any opinion)
+3. checked judgment (Y/N/T with lineage; an unresolved T is a hidden no)
+4. verification (maker ≠ verifier; outcome-checked, never existence; the
+   panel)
+5. the five refusals
+6. …then reflection and the self-image as the distinctive feature they are
+   ("the record paints it"), the portal, the contemplative backdrop.
+The two mermaid diagrams already carry 1–4 — this is a reorder, not a
+rewrite. The README is Alex's voice: this spec deliberately does not touch
+`README.md`; D49 is his to accept, modify, or decline.
+
+**D50 (proposal) — name the two layers.**
+- **trellis-standard** — the harness: EMP-agnostic, surface-agnostic, model-
+  agnostic. Ships `examples/witness-emp.md` as a demonstration. The README
+  describes this layer, and README feedback (D49) applies here.
+- **trellis-instance: Empire of the Chief** — a specific deployment of the
+  standard: `examples/chief-of-staff-emp.md` as the core identity — **the
+  thing every judgment is formed against and every verification checks
+  lineage back to** — plus Brett's OAuth grant (C6), the Alliance-of-Empires
+  private channel (C4), and the seats/roles of D48. This is the EMP means
+  "one portable schema; each chief wraps their own" landing in architecture,
+  and it answers half of the repo's own open D45 (who writes a newcomer's
+  EMP: the org deploying the instance does — theirs, not the standard's).
+- **Open question to Alex:** where does instance-specific material live so
+  the standard stays clean — a `deployments/` directory in-repo, a
+  downstream config repo, or docs-only convention? Whichever shape, the
+  supersession discipline holds: instance material supersedes and composes
+  with the standard; it never edits it.
