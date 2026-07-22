@@ -262,9 +262,12 @@ class GoogleDriveAdapter:
         mime = str(f.get("mimeType", "") or "")
         # unchanged-since-last-ingest? skip the content download entirely —
         # the metadata listing already proves there is nothing new to read.
+        # `known` maps file id → the DRIVE timestamp we last saw (kept apart
+        # from event_time, which is the content's own day).
         if fid in self.known:
             try:
-                if parse_iso(str(f.get("modifiedTime"))) == self.known[fid]:
+                if parse_iso(str(f.get("modifiedTime"))) == parse_iso(
+                        str(self.known[fid])):
                     self.skipped_unchanged += 1
                     return None
             except (TypeError, ValueError):
@@ -286,12 +289,29 @@ class GoogleDriveAdapter:
             self.skipped.append(name)
             return None
         content = raw.decode("utf-8", errors="replace") if isinstance(raw, bytes) else str(raw)
-        when_raw = f.get("modifiedTime") or f.get("createdTime")
-        try:
-            event_time = parse_iso(str(when_raw))
-        except (TypeError, ValueError):
-            self.skipped.append(name)    # a file with no honest timestamp is refused
-            return None
+        # THE DOCUMENT'S OWN DAY outranks Drive's upload time: a bulk-synced
+        # transcript's modifiedTime is the day it was UPLOADED, not the day it
+        # happened — 655 old meeting notes masqueraded as 2026-07-21 until the
+        # verification panel's freshness lens refuted the first day-digest
+        # built on them (2026-07-22). A leading YYYY-MM-DD in the filename is
+        # the content's claim; modifiedTime is the fallback.
+        import re as _re
+        from datetime import datetime as _dt, timezone as _tz
+        event_time = None
+        m = _re.match(r"^(\d{4})-(\d{2})-(\d{2})", name)
+        if m:
+            try:
+                event_time = _dt(int(m.group(1)), int(m.group(2)),
+                                 int(m.group(3)), tzinfo=_tz.utc)
+            except ValueError:
+                event_time = None
+        if event_time is None:
+            when_raw = f.get("modifiedTime") or f.get("createdTime")
+            try:
+                event_time = parse_iso(str(when_raw))
+            except (TypeError, ValueError):
+                self.skipped.append(name)   # no honest timestamp — refused
+                return None
         low = name.lower()
         is_transcript = any(m in low for m in _TRANSCRIPT_MARKERS)
         return RawItem(
@@ -304,5 +324,6 @@ class GoogleDriveAdapter:
             # a Drive doc named like a Meet/Gemini transcript is ASR output —
             # flagged fallible; a human-authored doc is not machine-transcribed.
             machine_transcribed=is_transcript,
-            meta=(("title", name), ("mime", mime)),
+            meta=(("title", name), ("mime", mime),
+                  ("modified", str(f.get("modifiedTime") or ""))),
         )

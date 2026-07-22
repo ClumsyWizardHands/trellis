@@ -1225,6 +1225,13 @@ class OnboardingRitual:
                     out.append((day, "grew",
                                 f"{have - seen} new item(s) arrived for this "
                                 "day since the prior reading"))
+                elif have != seen and have > 0:
+                    # SHRUNK: corrections moved items out of this day (e.g. a
+                    # mis-dated batch re-stamped to its true days) — the old
+                    # reading described a day that no longer exists as read.
+                    out.append((day, "grew",
+                                f"the day's item set changed ({seen} → {have} "
+                                "item(s)) since the prior reading"))
         out.sort(reverse=True)
         return out
 
@@ -1405,7 +1412,8 @@ class OnboardingRitual:
             # file's content is never re-downloaded (its modifiedTime IS the
             # stored event_time — the listing alone proves nothing changed).
             adapter.known = {
-                e.body.get("item_id"): e.stamp.event_time
+                e.body.get("item_id"): (e.body.get("store_modified")
+                                        or e.stamp.event_time.isoformat())
                 for e in self.ledger.active(SOURCE_DOCUMENT_KIND)
                 if e.body.get("source") == "gdrive"
                 and e.body.get("channel") == adapter.folder_id}

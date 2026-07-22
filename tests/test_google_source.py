@@ -166,17 +166,31 @@ def test_known_unchanged_files_skip_the_content_download(tmp_path):
     """The 68-minute-stall follow-up: an unchanged file (same id + same
     modifiedTime as already ingested) must not be re-downloaded — the listing
     alone settles it. A CHANGED file still fetches."""
-    from trellis.clock import parse_iso
     drive = _drive()
     adapter = GoogleDriveAdapter(folder_id=FOLDER, service=drive)
     adapter.known = {
-        "doc-1": parse_iso("2026-07-01T10:00:00+00:00"),   # unchanged → skip
-        "doc-2": parse_iso("2026-01-01T00:00:00+00:00"),   # older → changed → fetch
+        "doc-1": "2026-07-01T10:00:00+00:00",   # unchanged → skip
+        "doc-2": "2026-01-01T00:00:00+00:00",   # older → changed → fetch
     }
     items = {i.item_id for i in adapter.discover()}
     assert "doc-1" not in items                    # not yielded…
     assert adapter.skipped_unchanged == 1          # …and counted honestly
     assert "doc-2" in items and "txt-1" in items   # changed + new still flow
+
+
+def test_filename_date_outranks_upload_time(tmp_path):
+    """The freshness-lens catch (2026-07-22): a bulk-synced doc's modifiedTime
+    is the UPLOAD day; a leading YYYY-MM-DD in the name is the content's own
+    day and wins. The Drive timestamp is kept separately for change-detection."""
+    pages = [{"files": [
+        {"id": "d1", "name": "2026-05-20_old-meeting-notes-by-gemini",
+         "mimeType": "application/vnd.google-apps.document",
+         "modifiedTime": "2026-07-21T17:40:00+00:00"},      # uploaded much later
+    ]}]
+    drive = FakeDrive(FakeFilesAPI(pages, {"d1": b"words"}, {}))
+    item = next(GoogleDriveAdapter(folder_id=FOLDER, service=drive).discover())
+    assert item.event_time.date().isoformat() == "2026-05-20"   # the content's day
+    assert dict(item.meta)["modified"] == "2026-07-21T17:40:00+00:00"
 
 
 def test_unreadable_file_is_counted_not_fatal(tmp_path):

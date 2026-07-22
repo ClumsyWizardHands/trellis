@@ -142,6 +142,11 @@ def document_harvester(ledger: Ledger, agent: str) -> Harvester:
                   "source": item.source, "channel": item.channel,
                   "item_id": item.item_id, "kind": item.kind,
                   "machine_transcribed": item.machine_transcribed,
+                  # the SOURCE system's own timestamp (e.g. Drive modifiedTime),
+                  # kept apart from event_time = the content's day — so the
+                  # unchanged-skip can compare against the store's clock even
+                  # when the content's day is older (D53 freshness-lens catch).
+                  "store_modified": dict(item.meta).get("modified") or None,
                   "provenance": prov.to_dict()},
             event_time=item.event_time,
             tags=(item.source, "document", title[:60]))
