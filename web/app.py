@@ -786,18 +786,40 @@ def _curiosities_body(led: Ledger) -> str:
     # SPLIT (Alex, 2026-07-22): questions that genuinely need the human's
     # Y/N/T float to the TOP; everything else is the agent's OWN research
     # agenda — listed, never presented as the human's homework.
-    needs_you, researching = [], []
+    from trellis.onboard import term_review_for
+    needs_you, in_hand, researching = [], [], []
     for q in c["open"]:
         term = term_from_assumption(q.get("assumption") or "")
         obs = obs_by_key.get("term:" + question_key(term)) if term else None
         if term and obs is not None and (obs.body.get("meaning") or "").strip():
-            needs_you.append(q)
+            r = term_review_for(led, term)
+            if r is not None and r.body.get("verdict") in ("N", "T"):
+                in_hand.append((q, term, r))     # answered — back with the agent
+            else:
+                needs_you.append(q)
         else:
             researching.append(q)
     if needs_you:
         out.append(f'<h3 style="margin-top:14px">Needs your Y/N/T '
                    f'<span class="muted small">({len(needs_you)} reading(s) '
                    'I have brought you)</span></h3>')
+    if in_hand:
+        out.append(f'<h3 style="margin-top:18px">Back in my hands '
+                   f'<span class="muted small">({len(in_hand)} — you answered; '
+                   'I am re-reading and will bring a deeper version)</span></h3>')
+        for q, term, r in in_hand:
+            v = r.body.get("verdict")
+            if v == "T":
+                note = (r.body.get("note") or "").strip()
+                line = ('△ you triangulated'
+                        + (f': “{esc(note[:160])}”' if note else "")
+                        + ' — re-reading with this folded in on the coming pass')
+            else:
+                line = ('✗ you said no — re-reading on my own '
+                        '(your reason deliberately not shown to me)')
+            out.append(f'<div class="panel"><div><b>{esc(q["title"])}</b></div>'
+                       f'<div class="muted small" style="margin-top:4px">{line}'
+                       '</div></div>')
     for q in needs_you + [None] + researching:
         if q is None:
             out.append(
