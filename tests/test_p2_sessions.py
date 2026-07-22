@@ -158,6 +158,7 @@ def test_sessions_route_200(ledger, ground, monkeypatch):
     _emit(ledger, ground, author="Alice", content="hi", is_dm=True, author_id="111")
     monkeypatch.setattr(webapp, "LEDGER_PATH", str(ledger.path))
     client = TestClient(webapp.app)
+    client.post("/login", data={"token": webapp._LOGIN_TOKEN}, follow_redirects=False)
     r = client.get("/sessions")
     assert r.status_code == 200
     assert "Alice" in r.text
@@ -172,6 +173,7 @@ def test_session_route_200(ledger, ground, monkeypatch):
     sid = [s for s in derive_sessions(ledger, reg) if s.surface == "dm"][0].session_id
     monkeypatch.setattr(webapp, "LEDGER_PATH", str(ledger.path))
     client = TestClient(webapp.app)
+    client.post("/login", data={"token": webapp._LOGIN_TOKEN}, follow_redirects=False)
     r = client.get(f"/session/{sid}")
     assert r.status_code == 200
     assert "hello there" in r.text

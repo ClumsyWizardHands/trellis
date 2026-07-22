@@ -725,13 +725,30 @@ def _session_detail_body(led: Ledger, session_id: str) -> str:
     return "".join(out)
 
 
+def _require_login_redirect(request: Request):
+    """A page that requires the owner's login. Unlike the write seats (which 401),
+    an unauthenticated GET redirects to /login — friendlier for a browsed page.
+    The Sessions surface shows DM CONTENT, so it is owner-only even on localhost
+    (Alex, 2026-07-21), unlike the other read pages which are open comprehension."""
+    p = _principal(request)
+    if p is None or not p.authenticated:
+        return RedirectResponse("/login", status_code=303)
+    return None
+
+
 @app.get("/sessions", response_class=HTMLResponse)
-def sessions_page(frag: int = 0):
+def sessions_page(request: Request, frag: int = 0):
+    gate = _require_login_redirect(request)
+    if gate is not None:
+        return gate
     return _respond("/sessions", _sessions_body(_ledger()), bool(frag))
 
 
 @app.get("/session/{session_id}", response_class=HTMLResponse)
-def session_detail_page(session_id: str, frag: int = 0):
+def session_detail_page(request: Request, session_id: str, frag: int = 0):
+    gate = _require_login_redirect(request)
+    if gate is not None:
+        return gate
     body = _session_detail_body(_ledger(), session_id)
     if frag:
         return HTMLResponse(body)
