@@ -1167,6 +1167,38 @@ the waiting state surfaced in check-ins, the pass print, and the portal's
 
 ---
 
+## D55 — The walk reads only finished, fully-delivered days; a grown day reopens ✅ fresh
+
+**Decision:** the backward day-walk and the forward intake coexist under three rules.
+(1) **Today is never read** — a day is a unit only once it is over; digesting a
+half-lived day would freeze a partial reading. (2) **Never read below the acquisition
+frontier** — a day is walkable only when the Discord descent has passed it on every
+still-descending channel (a bottomed channel constrains nothing) AND the paced doc
+backlog owes it nothing; otherwise its material may still be arriving. (3) **A walked
+day that grows, reopens** — when late material lands in an already-read day (a slower
+channel, a deferred doc, a correction), the day is re-read with the growth named in
+the prompt ("N new items arrived since the prior reading"), passes the panel again,
+and returns to the human's Y/N/T — an approved reading of an incomplete day never
+quietly stands. New days that arrive tomorrow are simply the newest undigested days:
+the walk reads them first (recency priority), then resumes its descent into the past.
+
+**Triangulation:**
+1. Alex, 2026-07-22: "how do we make sure it's walking individually through the past
+   days, while also ingesting the future ones that come in?" — the probe that exposed
+   both holes (a freezable today; a day read before fully delivered).
+2. D53/D54's own grammar: a digest claims "what happened THIS day, from these items"
+   — a claim over an incomplete item set is false the moment more arrives; reopening
+   is the supersession discipline (D2) applied to comprehension.
+3. D52's frontier is computable precisely BECAUSE acquisition is ordered: descent and
+   the doc backlog both advance strictly oldest-ward, so "fully delivered" is a
+   ledger query (descent cursors + the pass's oldest fed doc), not a guess.
+
+**Consequence:** eligibility rules + `_discord_frontier` + the doc-backlog frontier in
+`onboard._digest_days`; the `grew` rework mode (steered prompt, panel re-check, back
+to pending); `tests/test_d55_continuity.py`.
+
+---
+
 ## ⏳ Watch list (decisions deliberately NOT taken)
 
 - **W1 — No skill marketplace / no auto-installed skills.** [OPENCLAW] supply-chain

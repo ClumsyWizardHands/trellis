@@ -984,6 +984,9 @@ class OnboardingRitual:
         # D54: the human gate on the day-walk — one day at a time, each
         # awaiting the human's Y/N/T before the walk advances.
         self.day_gate = bool(day_gate)
+        # D55: the paced-doc acquisition frontier (recomputed each pass) —
+        # the walk never reads a day the backlog may still owe material to.
+        self._doc_frontier: Optional[str] = None
 
     # ----- the pass ----------------------------------------------------------
 
@@ -1020,6 +1023,7 @@ class OnboardingRitual:
             if sources:
                 self._stage("sources", "reading document sources, newest first, "
                             "paced", now)
+            self._doc_frontier = None      # D55: recomputed each pass
             for adapter in (sources or []):
                 name = type(adapter).__name__
                 # several adapters of one class (two transcript folders, two
@@ -1030,7 +1034,12 @@ class OnboardingRitual:
                     name = f"{name}({where})"
                 try:
                     ing = Ingestor(self.ledger, author=self.author)
-                    batch, already, deferred = self._paced_batch(ing, adapter)
+                    batch, already, deferred, oldest_fed = \
+                        self._paced_batch(ing, adapter)
+                    if oldest_fed is not None:
+                        f = oldest_fed.date().isoformat()
+                        if self._doc_frontier is None or f > self._doc_frontier:
+                            self._doc_frontier = f
                     res = ing.ingest(batch,
                                      document_harvester(self.ledger, self.author))
                     summary["ingested"][name] = {
@@ -1124,7 +1133,7 @@ class OnboardingRitual:
         days = self._days_with_material()
         digested = []
 
-        for day, mode, note in self._days_needing_rework()[:max_days]:
+        for day, mode, note in self._days_needing_rework(days)[:max_days]:
             self._read_day(day, days.get(day, []), mode=mode,
                            human_note=note, now=now)
             digested.append(day)
@@ -1134,19 +1143,55 @@ class OnboardingRitual:
         if self.day_gate and pending_review_day(self.ledger):
             return digested            # the walk waits on the human's check
 
+        # D55 eligibility: only COMPLETED days (today is still being lived —
+        # reading it now would freeze a half-day forever), and only days the
+        # ACQUISITION has fully delivered (the Discord descent and the paced
+        # doc backlog both advance oldest-ward; a day below either frontier
+        # may still be missing material).
+        today = self.ground.now().date().isoformat()
+        frontier = max((f for f in (self._discord_frontier(),
+                                    self._doc_frontier) if f), default=None)
+        def _eligible(day: str) -> bool:
+            if day >= today:
+                return False
+            if frontier is not None and day <= frontier:
+                return False
+            return True
+
         new_cap = 1 if self.day_gate else (max_days - len(digested))
         todo = sorted((d for d in days
-                       if day_review_state(self.ledger, d) == "undigested"),
+                       if day_review_state(self.ledger, d) == "undigested"
+                       and _eligible(d)),
                       reverse=True)[:new_cap]
         for day in todo:
             self._read_day(day, days[day], mode="fresh", now=now)
             digested.append(day)
         return digested
 
-    def _days_needing_rework(self) -> list:
+    def _discord_frontier(self) -> Optional[str]:
+        """The newest DATE the Discord descent has not yet fully delivered:
+        the max oldest_time date over channels still descending (a bottomed
+        channel constrains nothing). None = fully acquired or no descent."""
+        from .backfill import DESCENT_CURSOR_KIND
+        latest: dict = {}
+        for e in self.ledger.entries():
+            if e.kind == DESCENT_CURSOR_KIND and e.body.get("channel"):
+                latest[e.body["channel"]] = e.body
+        fronts = [b.get("oldest_time") for b in latest.values()
+                  if not b.get("bottom") and b.get("oldest_time")]
+        return max(fronts)[:10] if fronts else None
+
+    def _days_needing_rework(self, days: Optional[dict] = None) -> list:
         """[(day, mode, human_note)] newest first. A panel-refuted day is
         re-read at most twice on the machine's authority — after that it stays
-        contested for the human (no silent refute→re-read→refute loop)."""
+        contested for the human (no silent refute→re-read→refute loop).
+
+        D55: a WALKED day that GREW — late material arrived after its reading
+        (a slower channel's descent, a deferred doc, a correction) — reopens:
+        it is re-read with the growth named, goes back through the panel, and
+        returns to the human's gate. An approved reading of an incomplete day
+        must never quietly stand."""
+        days = days if days is not None else self._days_with_material()
         out = []
         for e in self.ledger.active(DAY_DIGEST_KIND):
             day = e.body.get("day")
@@ -1158,6 +1203,13 @@ class OnboardingRitual:
                 out.append((day, "T", (r.body.get("note") if r else "") or ""))
             elif state == "refuted_by_panel" and int(e.body.get("rework", 0)) < 2:
                 out.append((day, "panel", ""))
+            else:
+                have = len(days.get(day, []))
+                seen = int(e.body.get("items", 0))
+                if have > seen:
+                    out.append((day, "grew",
+                                f"{have - seen} new item(s) arrived for this "
+                                "day since the prior reading"))
         out.sort(reverse=True)
         return out
 
@@ -1166,7 +1218,8 @@ class OnboardingRitual:
         entries = sorted(entries, key=lambda e: e.stamp.event_time)
         verb = {"fresh": "reading", "N": "RE-reading (human said no)",
                 "T": "RE-reading with the human's note",
-                "panel": "RE-reading (panel refuted)"}[mode]
+                "panel": "RE-reading (panel refuted)",
+                "grew": "RE-reading (new material arrived)"}[mode]
         self._stage("digest", f"{verb} the day {day} as a unit "
                     f"({len(entries)} item(s))", now)
         proposed = self._propose_day_digest(day, entries, mode=mode,
@@ -1182,6 +1235,8 @@ class OnboardingRitual:
                  "withheld — figured out afresh)",
             "T": "re-read WITH the human's triangulation note folded in",
             "panel": "re-read after the independent panel refuted the prior reading",
+            "grew": "re-read after new material arrived for this day "
+                    "(the earlier reading saw an incomplete day)",
         }
         # a T re-read carries the human's steer, so it may sit a little higher
         # than an unconfirmed model reading — but it is still a model reading.
@@ -1256,6 +1311,11 @@ class OnboardingRitual:
             steer = ("\n\nAn independent verification panel REFUTED the "
                      "previous reading of this day. Read it again from "
                      "scratch; claim less if the items support less.")
+        elif mode == "grew":
+            steer = (f"\n\nNEW MATERIAL arrived for this day after it was "
+                     f"last read ({human_note}). The earlier reading saw an "
+                     "incomplete day — read the whole day again as it now "
+                     "stands.")
         user = (f"The day: {day} ({len(entries)} item(s); showing "
                 f"{len(rows)}).\n" + fence_untrusted("\n".join(lines))
                 + steer + "\n\nWhat happened THIS day? JSON only.")
@@ -1338,9 +1398,14 @@ class OnboardingRitual:
                 urgent.append(it)          # a correction/resume — never deferred
             else:
                 already += 1
-        batch = urgent + fresh[:self.docs_per_pass]
+        fed = fresh[:self.docs_per_pass]
+        batch = urgent + fed
         deferred = max(0, len(fresh) - self.docs_per_pass)
-        return batch, already, deferred
+        # D55: while a backlog remains, the oldest FED item marks this
+        # adapter's acquisition frontier — days at/below it may still be
+        # missing documents and must not be walked yet.
+        oldest_fed = fed[-1].event_time if (fed and deferred) else None
+        return batch, already, deferred, oldest_fed
 
     def _focus_channels(self) -> set:
         """Where should the descent deepen? The channels in which OPEN term
