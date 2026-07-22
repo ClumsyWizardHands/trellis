@@ -45,7 +45,7 @@ class FakeFilesAPI:
     def export(self, fileId, mimeType):
         return _Call(self.exports[fileId])
 
-    def get_media(self, fileId):
+    def get_media(self, fileId, **kw):
         return _Call(self.media[fileId])
 
 
@@ -119,9 +119,13 @@ def test_discover_yields_scoped_rawitems(tmp_path):
     assert set(items) == {"doc-1", "txt-1", "doc-2"}
     assert adapter.skipped == ["photo.png"]            # counted, never eaten
 
-    # the Drive QUERY itself is folder-scoped — nothing outside is even listed
+    # the Drive QUERY itself is folder-scoped — nothing outside is even listed —
+    # and shared-drive content is included (without these flags a shared-drive
+    # folder lists EMPTY and reads as "nothing there", the live-wiring bug)
     for kw in adapter._service.files().list_queries:
         assert f"'{FOLDER}' in parents" in kw["q"]
+        assert kw["includeItemsFromAllDrives"] is True
+        assert kw["supportsAllDrives"] is True
 
     doc = items["doc-1"]
     assert doc.kind == "transcript"                    # Meet-style transcript name

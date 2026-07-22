@@ -44,7 +44,8 @@ SCOPES = ["https://www.googleapis.com/auth/drive.readonly"]
 _GOOGLE_DOC = "application/vnd.google-apps.document"
 _TEXT_MIMES = {"text/plain", "text/markdown", "text/x-markdown"}
 
-_TRANSCRIPT_MARKERS = ("transcript", "notes by gemini")
+_TRANSCRIPT_MARKERS = ("transcript", "notes by gemini", "notes-by-gemini",
+                       "meeting-started")
 
 
 class GoogleNotGranted(Exception):
@@ -214,6 +215,13 @@ class GoogleDriveAdapter:
                         "modifiedTime, createdTime)"),
                 pageSize=self.page_size,
                 pageToken=page_token,
+                # a granted folder may live inside a SHARED DRIVE (empire
+                # village does) — without these two flags the v3 API silently
+                # returns an EMPTY list for shared-drive content, which would
+                # read as "nothing there" instead of the truth. Harmless for
+                # My-Drive folders.
+                includeItemsFromAllDrives=True,
+                supportsAllDrives=True,
             ).execute()
             for f in resp.get("files", []):
                 item = self._to_rawitem(drive, f)
@@ -232,7 +240,8 @@ class GoogleDriveAdapter:
                 raw = drive.files().export(
                     fileId=fid, mimeType="text/plain").execute()
             elif mime in _TEXT_MIMES:
-                raw = drive.files().get_media(fileId=fid).execute()
+                raw = drive.files().get_media(fileId=fid,
+                                              supportsAllDrives=True).execute()
             else:
                 self.skipped.append(name)
                 return None
