@@ -64,6 +64,17 @@ def _principal(request: Request) -> "Principal | None":
     return _AUTH.verify_session(request.cookies.get(SESSION_COOKIE))
 
 
+@app.exception_handler(Exception)
+async def _validation_bounce(request: Request, exc: Exception):
+    """A malformed FORM post (e.g. a stripped field) bounces back to the page
+    it came from instead of a raw JSON wall; everything else re-raises."""
+    from fastapi.exceptions import RequestValidationError
+    if isinstance(exc, RequestValidationError) and request.method == "POST":
+        return RedirectResponse(request.headers.get("referer") or "/",
+                                status_code=303)
+    raise exc
+
+
 @app.exception_handler(HTTPException)
 async def _friendly_auth_redirect(request: Request, exc: HTTPException):
     """A signed-out human clicking a Y/N/T button must land on the LOGIN page,
@@ -235,14 +246,19 @@ margin-right:.35em;opacity:.35;transition:opacity .2s}}
       .finally(function () {{ busy = false; }});
   }}
   document.addEventListener('submit', function (e) {{
-    /* one click, one write: disable the form's buttons on submit so a
-       no-feedback moment can't collect duplicate reviews */
-    var btns = e.target.querySelectorAll('button');
-    for (var i = 0; i < btns.length; i++) {{
-      btns[i].disabled = true;
-      btns[i].style.opacity = '0.5';
-    }}
-    if (e.submitter) e.submitter.textContent = '…sending';
+    /* one click, one write — but disable AFTER the browser serializes the
+       form: a synchronous disable strips the clicked button's name=value from
+       the POST (that produced a 'verdict field required' 422 live). */
+    var f = e.target;
+    var sub = e.submitter;
+    setTimeout(function () {{
+      var btns = f.querySelectorAll('button');
+      for (var i = 0; i < btns.length; i++) {{
+        btns[i].disabled = true;
+        btns[i].style.opacity = '0.5';
+      }}
+      if (sub) sub.textContent = '…sending';
+    }}, 0);
   }});
   var es = new EventSource('/stream');
   es.addEventListener('tick', refresh);
