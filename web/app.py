@@ -64,15 +64,17 @@ def _principal(request: Request) -> "Principal | None":
     return _AUTH.verify_session(request.cookies.get(SESSION_COOKIE))
 
 
-@app.exception_handler(Exception)
-async def _validation_bounce(request: Request, exc: Exception):
+from fastapi.exceptions import RequestValidationError
+
+
+@app.exception_handler(RequestValidationError)
+async def _validation_bounce(request: Request, exc: RequestValidationError):
     """A malformed FORM post (e.g. a stripped field) bounces back to the page
-    it came from instead of a raw JSON wall; everything else re-raises."""
-    from fastapi.exceptions import RequestValidationError
-    if isinstance(exc, RequestValidationError) and request.method == "POST":
-        return RedirectResponse(request.headers.get("referer") or "/",
-                                status_code=303)
-    raise exc
+    it came from instead of a raw JSON wall; API-style requests keep the 422."""
+    from fastapi.responses import JSONResponse
+    if request.method == "POST" and request.headers.get("referer"):
+        return RedirectResponse(request.headers["referer"], status_code=303)
+    return JSONResponse({"detail": exc.errors()}, status_code=422)
 
 
 @app.exception_handler(HTTPException)
