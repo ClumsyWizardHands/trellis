@@ -403,6 +403,42 @@ def test_term_yn_t_grammar_aims_curiosity(ledger, tmp_path, ground):
                    for q in qlog.open_questions())
 
 
+def test_t_note_naming_a_known_term_carries_its_reading(ledger, tmp_path,
+                                                        ground):
+    """'Go look at X' must arrive WITH X: when a triangulation note mentions a
+    term the record already holds a reading for, that reading rides the steer
+    (Alex's third cep review, 2026-07-23)."""
+    from trellis.onboard import review_term
+    ws = Workspace(tmp_path / "ws", ledger)
+    qlog = QuestionLog(ledger, ground)
+    _grant(ledger)
+    _seed_messages(ledger, EMPIRE_TEXTS + [
+        ("brett", ["the cep routes context", "cep again", "cep matters",
+                   "context expansion protocol is how memory navigates"])])
+    maker = MockProvider(id="mock:s")
+    for _ in range(4):
+        maker.enqueue_text(json.dumps({"meaning": "x", "confidence": 0.5,
+                                       "unsure": ""}))
+    ritual = OnboardingRitual(ledger, ws, ground=ground, provider=maker,
+                              registry=IdentityRegistry(ledger),
+                              seed_terms=["cep", "context expansion protocol"],
+                              day_gate=False)
+    ritual.learning_pass(max_terms=2)      # both terms get first readings
+    # give the full phrase a distinct known reading
+    from trellis.onboard import confirm_term_meaning
+    confirm_term_meaning(ledger, ws, qlog, "context expansion protocol", "alex",
+                         "the navigation system that expands context on demand",
+                         ground)
+    review_term(ledger, ws, qlog, "cep", "triangulate", "alex",
+                note="stop searching cep — look at context expansion protocol")
+    maker.enqueue_text(json.dumps({"meaning": "short for the protocol",
+                                   "confidence": 0.7, "unsure": ""}))
+    ritual.learning_pass(max_terms=1)
+    prompt = maker.calls[-1]["messages"][0]["content"]
+    assert "Readings already on my record" in prompt
+    assert "expands context on demand" in prompt     # the known reading rode along
+
+
 # --------------------------------------------------------------------------- #
 # 5. the full pass — coordinated, idempotent, honest                           #
 # --------------------------------------------------------------------------- #

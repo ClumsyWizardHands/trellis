@@ -1710,6 +1710,23 @@ class OnboardingRitual:
                              "answered TRIANGULATE — close, but there is more "
                              f"depth. Their clarifying note (trusted): {note}\n"
                              "Fold it in, re-trace, and read again.")
+                    # if the note names terms the record already holds readings
+                    # for, hand those readings in — "go look at X" must arrive
+                    # WITH X, not as an errand the excerpts can't fulfil.
+                    related = []
+                    low_note = note.lower()
+                    for e2 in self.ledger.active(TERM_OBSERVATION_KIND):
+                        t2 = e2.body.get("term", "")
+                        if (t2 and t2 != term and t2 in low_note
+                                and (e2.body.get("meaning") or "").strip()):
+                            related.append(
+                                f"'{t2}' (confidence "
+                                f"{e2.body.get('confidence')}): "
+                                f"{e2.body['meaning'][:220]}")
+                    if related:
+                        steer += ("\n\nReadings already on my record for terms "
+                                  "the note mentions — use them:\n"
+                                  + "\n".join(related[:3]))
                     cap = 0.8
                     basis_note = ("re-proposed WITH the human's triangulation "
                                   "note folded in")
