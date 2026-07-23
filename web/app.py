@@ -234,6 +234,16 @@ margin-right:.35em;opacity:.35;transition:opacity .2s}}
       }})
       .finally(function () {{ busy = false; }});
   }}
+  document.addEventListener('submit', function (e) {{
+    /* one click, one write: disable the form's buttons on submit so a
+       no-feedback moment can't collect duplicate reviews */
+    var btns = e.target.querySelectorAll('button');
+    for (var i = 0; i < btns.length; i++) {{
+      btns[i].disabled = true;
+      btns[i].style.opacity = '0.5';
+    }}
+    if (e.submitter) e.submitter.textContent = '…sending';
+  }});
   var es = new EventSource('/stream');
   es.addEventListener('tick', refresh);
   document.addEventListener('focusout', function () {{
