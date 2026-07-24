@@ -481,6 +481,42 @@ def test_human_teachings_are_standing_not_one_shot(ledger, tmp_path, ground):
     assert "EMP+IRE acronym" in last and "always lowercase" in last
 
 
+def test_anchored_document_grounds_every_reading(ledger, tmp_path, ground):
+    """A doc anchored to a term rides every future reading as ground truth,
+    and the verifier panel sees it as evidence (Alex, 2026-07-24)."""
+    from trellis.onboard import anchor_document
+    ws = Workspace(tmp_path / "ws", ledger)
+    _grant(ledger)
+    _seed_messages(ledger, [("brett", ["pc-00 holds", "pc-00 again",
+                                       "check pc-00", "pc-00 is the wall"])])
+    # a real file, ingested + anchored in one move
+    doc = tmp_path / "pc-00-the-wall.md"
+    doc.write_text("PC-00: information must be understandable by human or "
+                   "agent before anything is built on it.", encoding="utf-8")
+    title = anchor_document(ledger, "pc-00", "alex", path=str(doc))
+    assert title == "pc-00-the-wall"
+    # re-anchoring by TITLE fragment of the now-ingested doc also works
+    anchor_document(ledger, "pc-00", "alex", title_fragment="pc-00-the-wall")
+
+    maker = MockProvider(id="mock:s")
+    for _ in range(3):
+        maker.enqueue_text(json.dumps({"meaning": "the foundational check",
+                                       "confidence": 0.6, "unsure": ""}))
+    panel = _panel(ledger, ["VERIFIED\nok"] * 4)
+    ritual = OnboardingRitual(ledger, ws, ground=ground, provider=maker,
+                              verifier=panel,
+                              registry=IdentityRegistry(ledger),
+                              seed_terms=["pc-00"], day_gate=False)
+    ritual.learning_pass(max_terms=1)
+    term_prompt = next(c["messages"][0]["content"] for c in maker.calls
+                       if "The term: 'pc-00'" in c["messages"][0]["content"])
+    assert "ANCHORED" in term_prompt
+    assert "must be understandable by human or" in term_prompt   # the doc itself
+    # the panel saw the anchored doc as evidence
+    lens_prompt = panel._verifiers[0].provider.calls[0]["messages"][0]["content"]
+    assert "OWNER-ANCHORED DOCUMENT" in lens_prompt
+
+
 # --------------------------------------------------------------------------- #
 # 5. the full pass — coordinated, idempotent, honest                           #
 # --------------------------------------------------------------------------- #

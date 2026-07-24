@@ -656,7 +656,14 @@ def verify_term_understanding(ledger: Ledger, obs: Entry, maker: str,
                                   f"{obs.body['human_note']}",
                               note="the owner's own clarification — a reading "
                                    "resting on this is resting on evidence")]
-                    if obs.body.get("human_note") else []))
+                    if obs.body.get("human_note") else [])
+                 + [Evidence(EvidenceKind.OUTPUT,
+                             ref=(f"OWNER-ANCHORED DOCUMENT "
+                                  f"'{a.body.get('title')}' (primary source): "
+                                  f"{str(a.body.get('content',''))[:1500]}"),
+                             note="a document the owner designated as ground "
+                                  "truth for this term")
+                    for a in anchored_docs_for(ledger, term)[:1]])
     return convene_verification(ledger, claim, verifier,
                                 subject_id=obs.id,
                                 subject_kind=TERM_OBSERVATION_KIND)
@@ -714,6 +721,81 @@ def human_notes_for(ledger: Ledger, term: str) -> list:
                 seen.add(note)
                 out.append(note)
     return out
+
+
+def anchored_docs_for(ledger: Ledger, term: str) -> list:
+    """The documents the owner has ANCHORED to this term — designated primary
+    sources. Resolved to the ACTIVE version by item_id, so a corrected doc
+    anchors its current content, never a stale snapshot."""
+    tkey = "term:" + question_key(term)
+    refs = []
+    for e in ledger.entries():
+        if (e.kind == TERM_REVIEW_KIND and e.body.get("term_key") == tkey
+                and e.body.get("doc_ref") and e.body["doc_ref"] not in refs):
+            refs.append(e.body["doc_ref"])
+    docs = []
+    for ref in refs:
+        d = next((x for x in ledger.active(SOURCE_DOCUMENT_KIND)
+                  if x.body.get("item_id") == ref), None)
+        if d is not None:
+            docs.append(d)
+    return docs
+
+
+def anchor_document(ledger: Ledger, term: str, human: str, *,
+                    path: Optional[str] = None,
+                    title_fragment: Optional[str] = None,
+                    note: str = "", author: str = "trellis-onboard") -> str:
+    """Anchor a document to a term as its primary source (Alex, 2026-07-24:
+    'I have a doc that actually has pc-00 — share it for triangulation').
+    Either ingest a new FILE through the idempotent spine, or point at a doc
+    already in the record by a title fragment. The anchor is a standing
+    T-review carrying the doc reference: every future reading of the term is
+    formed against the document's actual content."""
+    human = require_identity(human, "anchoring human")
+    if path:
+        from pathlib import Path as _P
+        from .transcripts import (_event_time_for, _is_machine_transcribed,
+                                  document_harvester)
+        from .sources import RawItem
+        p = _P(path).expanduser().resolve()
+        if not p.is_file():
+            raise FileNotFoundError(f"no file at {p}")
+        item = RawItem(source="shared", channel="shared",
+                       content=p.read_text(encoding="utf-8", errors="replace"),
+                       event_time=_event_time_for(p), item_id=str(p),
+                       kind="document",
+                       machine_transcribed=_is_machine_transcribed(p),
+                       meta=(("title", p.stem), ("path", str(p))))
+        Ingestor(ledger, author=author).ingest(
+            [item], document_harvester(ledger, author))
+        ref, title = str(p), p.stem
+    elif title_fragment:
+        frag = title_fragment.strip().lower()
+        matches = [e for e in ledger.active(SOURCE_DOCUMENT_KIND)
+                   if frag in (e.body.get("title") or "").lower()]
+        if not matches:
+            raise KeyError(f"no ingested document title contains "
+                           f"{title_fragment!r}")
+        if len(matches) > 1:
+            titles = ", ".join((m.body.get("title") or "?")[:50]
+                               for m in matches[:5])
+            raise KeyError(f"{len(matches)} documents match "
+                           f"{title_fragment!r} — be more specific: {titles}")
+        ref, title = matches[0].body.get("item_id"), matches[0].body.get("title")
+    else:
+        raise ValueError("anchor needs a file path or a title fragment")
+    ledger.append(
+        kind=TERM_REVIEW_KIND, author=human,
+        body={"term": term.strip().lower(),
+              "term_key": "term:" + question_key(term),
+              "obs_id": (latest_term_observation(ledger, term) or
+                         type("E", (), {"id": ""})).id,
+              "verdict": "T", "doc_ref": ref,
+              "note": note or (f"the document '{title}' is a primary source "
+                               f"for '{term}' — read it as ground truth")},
+        tags=("onboard", "term-anchor", term.strip().lower()))
+    return title
 
 
 def review_term(ledger: Ledger, workspace: Workspace, qlog: QuestionLog,
@@ -1712,6 +1794,14 @@ class OnboardingRitual:
                 continue
             steer, cap, basis_note = "", MODEL_MEANING_CONFIDENCE_CAP, ""
             # STANDING teachings ride EVERY visit, not just the next one:
+            anchors = anchored_docs_for(self.ledger, term)
+            for a in anchors[:2]:
+                steer += ("\n\nA document the owner has ANCHORED to this term "
+                          f"as a PRIMARY SOURCE — “{a.body.get('title')}” "
+                          "(ground truth for the reading):\n"
+                          + fence_untrusted(str(a.body.get("content", ""))[:3500]))
+                cap = 0.8
+                basis_note = "reading formed against the owner's anchored document(s)"
             standing = human_notes_for(self.ledger, term)
             if standing:
                 steer += ("\n\nWhat the owner has ALREADY told me about this "

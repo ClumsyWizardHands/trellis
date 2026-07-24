@@ -1132,6 +1132,36 @@ def cmd_day(args: argparse.Namespace) -> int:
     return 0
 
 
+# ---------- anchor (a document as a term's primary source) ----------
+
+
+def cmd_anchor(args: argparse.Namespace) -> int:
+    """`trellis anchor "pc-00" "pc-00-the-wall"` (title fragment of an
+    ingested doc) or `trellis anchor "pc-00" ~/Desktop/pc00.md` (a file —
+    ingested on the spot). Every future reading of the term is formed against
+    the document as ground truth."""
+    config.load_dotenv()
+    from .ledger import Ledger
+    from .onboard import anchor_document
+    ledger = Ledger(config.ledger_path())
+    human = os.environ.get("TRELLIS_HUMAN", "operator").strip() or "operator"
+    doc = args.doc
+    note = " ".join(args.note or [])
+    is_path = Path(doc).expanduser().is_file()
+    try:
+        title = anchor_document(ledger, args.term, human,
+                                path=doc if is_path else None,
+                                title_fragment=None if is_path else doc,
+                                note=note)
+    except (KeyError, FileNotFoundError, ValueError) as e:
+        print(f"✗ {e}", file=sys.stderr)
+        return 1
+    print(f"✓ anchored “{title}” to '{args.term}' — every future reading is "
+          "formed against it as a primary source (and the verifier panel "
+          "sees it as evidence).")
+    return 0
+
+
 # ---------- term (the human's Y/N/T on a term reading) ----------
 
 
@@ -1240,6 +1270,12 @@ def main(argv=None) -> int:
                                        "(closes its curiosity at human confidence)")
     c.add_argument("term", help="the term, e.g. \"empire\"")
     c.add_argument("meaning", help="what it means here, in your words")
+    an = sub.add_parser("anchor", help="anchor a document to a term as its "
+                                       "primary source (file path or the "
+                                       "title of an ingested doc)")
+    an.add_argument("term")
+    an.add_argument("doc", help="file path, or a title fragment of an ingested doc")
+    an.add_argument("note", nargs="*")
     tm = sub.add_parser("term", help="Y/N/T on a term reading — yes confirms, "
                                      "no sends it digging, triangulate steers")
     tm.add_argument("term")
@@ -1257,7 +1293,7 @@ def main(argv=None) -> int:
             "tick": cmd_tick, "run": cmd_run, "web": cmd_web,
             "discord": cmd_discord, "begin": cmd_begin, "onboard": cmd_begin,
             "google": cmd_google, "confirm": cmd_confirm,
-            "day": cmd_day, "term": cmd_term}[args.cmd](args)
+            "day": cmd_day, "term": cmd_term, "anchor": cmd_anchor}[args.cmd](args)
 
 
 if __name__ == "__main__":  # pragma: no cover
