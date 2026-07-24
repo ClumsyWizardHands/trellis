@@ -54,7 +54,13 @@ class Authenticator:
     """Verifies a credential and issues/validates signed sessions. One shared
     secret (the personal-agent case); the seam generalizes to real accounts."""
 
-    SESSION_TTL = 12 * 3600    # a login lasts a work session, then re-auth
+    # How long a login lasts. Default 30 DAYS: this portal binds to localhost
+    # on the owner's own machine, and a 12h expiry produced daily re-login
+    # ceremony with no safety gain (Alex, 2026-07-24: "driving me crazy").
+    # TRELLIS_SESSION_HOURS tunes it; a hosted/multi-user deployment should
+    # set it back down. Sessions stay tamper-evident and revocable — changing
+    # TRELLIS_APPROVER_SECRET invalidates every outstanding session at once.
+    SESSION_TTL = float(os.environ.get("TRELLIS_SESSION_HOURS", "720") or 720) * 3600
 
     def __init__(self, human_id: str, secret: str):
         self.human_id = require_identity(human_id, "human")
