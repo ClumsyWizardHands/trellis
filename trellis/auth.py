@@ -60,7 +60,8 @@ class Authenticator:
     # TRELLIS_SESSION_HOURS tunes it; a hosted/multi-user deployment should
     # set it back down. Sessions stay tamper-evident and revocable — changing
     # TRELLIS_APPROVER_SECRET invalidates every outstanding session at once.
-    SESSION_TTL = float(os.environ.get("TRELLIS_SESSION_HOURS", "720") or 720) * 3600
+    SESSION_TTL = int(float(os.environ.get("TRELLIS_SESSION_HOURS", "720")
+                            or 720) * 3600)   # int: a float Max-Age breaks cookies
 
     def __init__(self, human_id: str, secret: str):
         self.human_id = require_identity(human_id, "human")
