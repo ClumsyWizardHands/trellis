@@ -730,9 +730,16 @@ def anchored_docs_for(ledger: Ledger, term: str) -> list:
     tkey = "term:" + question_key(term)
     refs = []
     for e in ledger.entries():
-        if (e.kind == TERM_REVIEW_KIND and e.body.get("term_key") == tkey
-                and e.body.get("doc_ref") and e.body["doc_ref"] not in refs):
-            refs.append(e.body["doc_ref"])
+        if e.kind != TERM_REVIEW_KIND or e.body.get("term_key") != tkey:
+            continue
+        ref = e.body.get("doc_ref")
+        if not ref:
+            continue
+        if e.body.get("revoked"):
+            if ref in refs:
+                refs.remove(ref)          # struck — later re-anchor may restore
+        elif ref not in refs:
+            refs.append(ref)
     docs = []
     for ref in refs:
         d = next((x for x in ledger.active(SOURCE_DOCUMENT_KIND)
@@ -740,6 +747,33 @@ def anchored_docs_for(ledger: Ledger, term: str) -> list:
         if d is not None:
             docs.append(d)
     return docs
+
+
+def revoke_anchor(ledger: Ledger, term: str, human: str,
+                  title_fragment: str, note: str = "") -> str:
+    """Un-designate an anchored document (the wall-doc lesson, 2026-07-24: an
+    anchor can be WRONG — agent-authored canon wearing a human label — and the
+    human must be able to strike it). The revocation is an appended,
+    attributed entry; the note travels as a standing teaching so the lesson
+    outlives the mistake."""
+    human = require_identity(human, "revoking human")
+    frag = title_fragment.strip().lower()
+    target = next((a for a in anchored_docs_for(ledger, term)
+                   if frag in (a.body.get("title") or "").lower()), None)
+    if target is None:
+        raise KeyError(f"no anchored document on '{term}' matches "
+                       f"{title_fragment!r}")
+    ledger.append(
+        kind=TERM_REVIEW_KIND, author=human,
+        body={"term": term.strip().lower(),
+              "term_key": "term:" + question_key(term),
+              "verdict": "T", "obs_id": "",
+              "doc_ref": target.body.get("item_id"), "revoked": True,
+              "note": note or (f"the document '{target.body.get('title')}' is "
+                               f"NOT a canonical source for '{term}' — "
+                               "anchor struck")},
+        tags=("onboard", "term-anchor-revoked", term.strip().lower()))
+    return target.body.get("title") or "?"
 
 
 def anchor_document(ledger: Ledger, term: str, human: str, *,

@@ -1147,6 +1147,16 @@ def cmd_anchor(args: argparse.Namespace) -> int:
     human = os.environ.get("TRELLIS_HUMAN", "operator").strip() or "operator"
     doc = args.doc
     note = " ".join(args.note or [])
+    if getattr(args, "remove", False):
+        from .onboard import revoke_anchor
+        try:
+            title = revoke_anchor(ledger, args.term, human, doc, note)
+        except KeyError as e:
+            print(f"✗ {e}", file=sys.stderr)
+            return 1
+        print(f"✓ anchor struck: “{title}” no longer grounds '{args.term}' — "
+              "your note rides on as a standing teaching.")
+        return 0
     is_path = Path(doc).expanduser().is_file()
     try:
         title = anchor_document(ledger, args.term, human,
@@ -1276,6 +1286,8 @@ def main(argv=None) -> int:
     an.add_argument("term")
     an.add_argument("doc", help="file path, or a title fragment of an ingested doc")
     an.add_argument("note", nargs="*")
+    an.add_argument("--remove", action="store_true",
+                    help="strike the anchor instead of setting it")
     tm = sub.add_parser("term", help="Y/N/T on a term reading — yes confirms, "
                                      "no sends it digging, triangulate steers")
     tm.add_argument("term")
