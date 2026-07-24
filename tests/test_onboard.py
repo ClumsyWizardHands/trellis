@@ -439,6 +439,48 @@ def test_t_note_naming_a_known_term_carries_its_reading(ledger, tmp_path,
     assert "expands context on demand" in prompt     # the known reading rode along
 
 
+def test_human_teachings_are_standing_not_one_shot(ledger, tmp_path, ground):
+    """A T note must ride EVERY future visit, not just the next re-read —
+    the live 'I told it three times and it keeps forgetting' bug."""
+    from trellis.onboard import review_term
+    ws = Workspace(tmp_path / "ws", ledger)
+    qlog = QuestionLog(ledger, ground)
+    _grant(ledger)
+    _seed_messages(ledger, EMPIRE_TEXTS)
+    maker = MockProvider(id="mock:s")
+    for _ in range(6):
+        maker.enqueue_text(json.dumps({"meaning": "some reading",
+                                       "confidence": 0.6, "unsure": ""}))
+    ritual = OnboardingRitual(ledger, ws, ground=ground, provider=maker,
+                              registry=IdentityRegistry(ledger),
+                              seed_terms=["empire"], day_gate=False)
+    ritual.learning_pass(max_terms=1)
+    review_term(ledger, ws, qlog, "empire", "triangulate", "alex",
+                note="it is the EMP+IRE acronym")
+    ritual.learning_pass(max_terms=1)                 # consumes the review…
+    ritual.learning_pass(max_terms=1)                 # …but the teaching STAYS
+    ritual.learning_pass(max_terms=1)
+    term_calls = [c["messages"][0]["content"] for c in maker.calls
+                  if "The term: 'empire'" in c["messages"][0]["content"]]
+    for prompt in term_calls[1:]:                     # every visit after the T
+        assert "ALREADY told me" in prompt
+        assert "EMP+IRE acronym" in prompt
+    from trellis.onboard import latest_term_observation
+    obs = latest_term_observation(ledger, "empire")
+    assert "EMP+IRE acronym" in (obs.body.get("human_note") or "")
+    assert obs.body["confidence"] <= 0.8              # standing-notes cap
+
+    # a second teaching ACCUMULATES with the first
+    review_term(ledger, ws, qlog, "empire", "triangulate", "alex",
+                note="always lowercase, on purpose")
+    maker.enqueue_text(json.dumps({"meaning": "r", "confidence": 0.6,
+                                   "unsure": ""}))
+    ritual.learning_pass(max_terms=1)
+    last = [c["messages"][0]["content"] for c in maker.calls
+            if "The term: 'empire'" in c["messages"][0]["content"]][-1]
+    assert "EMP+IRE acronym" in last and "always lowercase" in last
+
+
 # --------------------------------------------------------------------------- #
 # 5. the full pass — coordinated, idempotent, honest                           #
 # --------------------------------------------------------------------------- #

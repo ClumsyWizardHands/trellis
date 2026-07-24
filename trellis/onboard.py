@@ -698,6 +698,24 @@ def term_review_for(ledger: Ledger, term: str) -> Optional[Entry]:
     return latest
 
 
+def human_notes_for(ledger: Ledger, term: str) -> list:
+    """EVERY T-note the human has ever given this term, in order, deduped —
+    standing teachings, not one-shot steers. (Found live, 2026-07-24: a note
+    steered exactly one re-read and then evaporated, so Alex taught the
+    acronym three times and the readings kept drifting back. A human's
+    teaching is permanent context until the question closes.)"""
+    tkey = "term:" + question_key(term)
+    out, seen = [], set()
+    for e in ledger.entries():
+        if (e.kind == TERM_REVIEW_KIND and e.body.get("term_key") == tkey
+                and e.body.get("verdict") == "T"):
+            note = (e.body.get("note") or "").strip()
+            if note and note not in seen:
+                seen.add(note)
+                out.append(note)
+    return out
+
+
 def review_term(ledger: Ledger, workspace: Workspace, qlog: QuestionLog,
                 term: str, verdict: str, human: str, note: str = "",
                 ground: Optional[TimeGround] = None,
@@ -1693,10 +1711,20 @@ class OnboardingRitual:
                                 "(dry seek recorded; question stays open)"})
                 continue
             steer, cap, basis_note = "", MODEL_MEANING_CONFIDENCE_CAP, ""
+            # STANDING teachings ride EVERY visit, not just the next one:
+            standing = human_notes_for(self.ledger, term)
+            if standing:
+                steer += ("\n\nWhat the owner has ALREADY told me about this "
+                          "term — standing, trusted; my reading must stay "
+                          "consistent with ALL of it:\n"
+                          + "\n".join(f"- {n[:300]}" for n in standing[:5]))
+                cap = 0.8
+                basis_note = ("reading formed WITH the owner's standing "
+                              "notes folded in")
             if review is not None:
                 v = review.body.get("verdict")
                 if v == "N":
-                    steer = ("\n\nA human reviewed the previous reading of this "
+                    steer += ("\n\nA human reviewed the previous reading of this "
                              "term and answered NO — it was not right. They "
                              "deliberately did not say why. Re-trace and read "
                              "again, more curiously; look for what a first "
@@ -1706,7 +1734,7 @@ class OnboardingRitual:
                                   "reason deliberately withheld)")
                 elif v == "T":
                     note = review.body.get("note") or "(no note given)"
-                    steer = ("\n\nA human reviewed the previous reading and "
+                    steer += ("\n\nA human reviewed the previous reading and "
                              "answered TRIANGULATE — close, but there is more "
                              f"depth. Their clarifying note (trusted): {note}\n"
                              "Fold it in, re-trace, and read again.")
@@ -1749,8 +1777,7 @@ class OnboardingRitual:
                 self.ledger, self.workspace, self.qlog, term, lineage,
                 author=self.author, ground=self.ground, proposed=proposed,
                 cap=cap, basis_note=basis_note,
-                human_note=(review.body.get("note", "") if review is not None
-                            and review.body.get("verdict") == "T" else ""))
+                human_note=" | ".join(standing) if standing else "")
             verdict = None
             try:
                 verdict = verify_term_understanding(self.ledger, obs,

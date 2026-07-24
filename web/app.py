@@ -913,6 +913,10 @@ def _curiosities_body(led: Ledger) -> str:
                                f'{esc(b["unsure"])}</div>')
                 if b.get("evidence_window"):
                     out.append(f'<div class="muted small">{esc(b["evidence_window"])}</div>')
+                if b.get("human_note"):
+                    out.append(f'<div class="small" style="margin-top:4px">'
+                               f'<b>standing — what you\'ve told me:</b> '
+                               f'{esc(str(b["human_note"])[:260])}</div>')
                 # full Y/N/T (Alex: "not only a yes"): N sends it back to dig
                 # on its own; T carries the note; Y confirms (the note, when
                 # given, is the human's own wording).
@@ -925,7 +929,11 @@ def _curiosities_body(led: Ledger) -> str:
                     '<button name="verdict" value="triangulate">△ Triangulate with note →</button>'
                     '<input name="note" placeholder="clarifying note (steers the re-read on T; '
                     'your own wording on Y; recorded but withheld on N)" '
-                    'style="flex:1;min-width:240px"></form></div>')
+                    'style="flex:1;min-width:240px"></form>'
+                    '<div class="muted small" style="margin-top:4px">If you\'re '
+                    'STATING the meaning, that\'s a <b>Yes with your wording</b> '
+                    '— it seals the answer. <b>Triangulate</b> keeps the '
+                    'question open for more digging.</div></div>')
                 continue
             else:
                 # the agent's OWN research agenda — status only, no input box
